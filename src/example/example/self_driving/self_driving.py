@@ -191,8 +191,6 @@ class SelfDrivingNode(Node):
             twist.linear.y = -0.2
             self.mecanum_pub.publish(twist)
             time.sleep(0.38/0.2)
-        
-        # 안 쓰는 모델
         elif self.machine_type == 'MentorPi_Acker':
             twist = Twist()
             twist.linear.x = 0.15
