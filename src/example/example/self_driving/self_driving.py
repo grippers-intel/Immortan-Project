@@ -471,10 +471,6 @@ class SelfDrivingNode(Node):
             if self.display:
                 self.fps.update()
                 bgr_image = self.fps.show_fps(bgr_image)
-                # TODO : shutdown 구현 (q 누르면 종료)
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    self.shutdown(None, None)
-                    break
 
             self.result_publisher.publish(self.bridge.cv2_to_imgmsg(bgr_image, "bgr8"))
 
