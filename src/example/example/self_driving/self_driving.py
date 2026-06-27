@@ -116,7 +116,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.2,
-                "angular_z": -0.25,
+                "angular_z": -0.2,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -435,7 +435,7 @@ class SelfDrivingNode(Node):
                 ):  # TODO 01 : 딜레이 조건 추가
                     if lane_x > 200:
                         self.count_turn += 1
-                        if self.count_turn > 5 and not self.start_turn:
+                        if self.count_turn > 10 and not self.start_turn:
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
@@ -456,7 +456,7 @@ class SelfDrivingNode(Node):
                         ):
                             self.start_turn = False
                         if not self.start_turn:
-                            self.pid.SetPoint = 130  # the coordinate of the line while the robot is in the middle of the lane
+                            self.pid.SetPoint = 170  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
                             self.pid.update(lane_x)
                             if self.machine_type != "MentorPi_Acker":
                                 twist.angular.z = common.set_range(
