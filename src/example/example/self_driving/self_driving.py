@@ -131,11 +131,16 @@ class SelfDrivingNode(Node):
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
         self.turn_threshold = 150
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
-        #   코너 안쪽으로 파고들면 절댓값 ↓(예: -0.40), 못 돌고 바깥으로 나가면 절댓값 ↑(예: -0.50).
-        self.turn_angular_z = -0.45
+        #   코너 안쪽으로 파고들면 절댓값 ↓(예: -0.38), 못 돌고 바깥으로 나가면 절댓값 ↑(예: -0.45).
+        #   [2단계] 우회전 시 안쪽 파고듦(오른쪽 바퀴가 선 넘음) 완화 위해 -0.45 → -0.40 으로 낮춤.
+        self.turn_angular_z = -0.40
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
+        # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
+        #   조향하지 않고 직진. 직선에서 아주 살짝씩 꼬물거리는 미세 진동(jitter)을 제거.
+        #   [2단계] 증상: 미세 흔들림 → 값 ↑, 차선 복귀가 둔하면 → 값 ↓.
+        self.lane_deadband = 6
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -330,11 +335,17 @@ class SelfDrivingNode(Node):
                             self.start_turn = False
                         if not self.start_turn:
                             self.pid.SetPoint = self.lane_setpoint  # [튜닝] 차선 중앙 목표점 (param_init의 lane_setpoint)
-                            self.pid.update(lane_x)
-                            if self.machine_type != 'MentorPi_Acker':
-                                twist.angular.z = common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
+                            # [2단계] 데드밴드: 차선 오차가 lane_deadband 이내면 조향하지 않고 직진.
+                            #   프레임마다 1~2px씩 떨리는 측정 노이즈로 인한 미세 진동(꼬물거림)을 제거함.
+                            if abs(lane_x - self.lane_setpoint) < self.lane_deadband:
+                                self.pid.clear()  # PID 내부 상태 초기화로 데드밴드 이탈 시 튐 방지
+                                twist.angular.z = 0.0
                             else:
-                                twist.angular.z = twist.linear.x * math.tan(common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)) / 0.145
+                                self.pid.update(lane_x)
+                                if self.machine_type != 'MentorPi_Acker':
+                                    twist.angular.z = common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
+                                else:
+                                    twist.angular.z = twist.linear.x * math.tan(common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)) / 0.145
                         else:
                             if self.machine_type == 'MentorPi_Acker':
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
