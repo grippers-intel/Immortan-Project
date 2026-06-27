@@ -115,8 +115,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.15,
-                "angular_z": -0.5,
+                "linear_x": 0.2,
+                "angular_z": -0.25,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -433,7 +433,7 @@ class SelfDrivingNode(Node):
                 if (
                     lane_x >= 0 and not self.stop and not self.start_delay
                 ):  # TODO 01 : 딜레이 조건 추가
-                    if lane_x > 150:
+                    if lane_x > 200:
                         self.count_turn += 1
                         if self.count_turn > 5 and not self.start_turn:
                             self.start_turn = True
