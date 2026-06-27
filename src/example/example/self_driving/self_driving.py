@@ -107,6 +107,12 @@ class SelfDrivingNode(Node):
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
 
+        # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
+        self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
+        self.turn_right_speed = 0.15     # 우회전 시 전진 속도
+        self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
+        self.turn_right_duration = 3.0   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+
         self.last_park_detect = False
         self.count_park = 0  
         self.stop = False  # stopping sign
@@ -274,6 +280,16 @@ class SelfDrivingNode(Node):
             time.sleep(1.5)
         self.mecanum_pub.publish(Twist())
 
+    # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
+    def turn_right_action(self):
+        twist = Twist()
+        twist.linear.x = self.turn_right_speed     # 전진하며
+        twist.angular.z = self.turn_right_angular  # 우회전
+        self.mecanum_pub.publish(twist)
+        time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝
+        self.mecanum_pub.publish(Twist())          # 정지
+        self.doing_turn_right = False              # 차선추종 재개
+
     def main(self):
         while self.is_running:
             time_start = time.time()
@@ -314,6 +330,11 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
                         self.crosswalk_stopping = False
                         self.stop = False
+                        # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
+                        if self.turn_right and not self.doing_turn_right:
+                            self.turn_right = False
+                            self.doing_turn_right = True
+                            threading.Thread(target=self.turn_right_action, daemon=True).start()
                     else:
                         self.stop = True               # 정지 유지
                         self.mecanum_pub.publish(Twist())
@@ -345,7 +366,7 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if lane_x >= 0 and not self.stop:
+                if lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전 동작 중엔 차선추종 양보
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
                         if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
