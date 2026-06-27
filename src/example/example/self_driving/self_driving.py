@@ -441,6 +441,7 @@ class SelfDrivingNode(Node):
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
+                    if self.start_turn:
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = self.drive_params["turn_right"][
                                 "angular_z"
@@ -452,11 +453,7 @@ class SelfDrivingNode(Node):
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
                         self.count_turn = 0
-                        if (
-                            time.time() - self.start_turn_time_stamp > 2
-                            and self.start_turn
-                        ):
-                            self.start_turn = False
+
                         if not self.start_turn:
                             self.pid.SetPoint = 185  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
                             self.pid.update(lane_x)
@@ -532,10 +529,14 @@ class SelfDrivingNode(Node):
                 )
 
                 if class_name == "crosswalk":
-                    if (
-                        center[1] > min_distance
-                    ):  # Obtain recent y-axis pixel coordinate of the crosswalk
-                        min_distance = center[1]
+                    box_area = abs(i.box[0] - i.box[2]) * abs(
+                        i.box[1] - i.box[3]
+                    )  # TODO 00 : 박스 크기 계산
+                    if box_area > 100000:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
+                        if (
+                            center[1] > min_distance
+                        ):  # Obtain recent y-axis pixel coordinate of the crosswalk
+                            min_distance = center[1]
                 elif class_name == "right":  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
