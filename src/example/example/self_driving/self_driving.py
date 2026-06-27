@@ -433,9 +433,11 @@ class SelfDrivingNode(Node):
                 if (
                     lane_x >= 0 and not self.stop and not self.start_delay
                 ):  # TODO 01 : 딜레이 조건 추가
-                    if lane_x > 200:
+                    if lane_x > 210 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
                         self.count_turn += 1
-                        if self.count_turn > 10 and not self.start_turn:
+                        if (
+                            self.count_turn > 3 and not self.start_turn
+                        ):  # 우회전이 얼마나 빨리 시작될지 7
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
@@ -456,7 +458,7 @@ class SelfDrivingNode(Node):
                         ):
                             self.start_turn = False
                         if not self.start_turn:
-                            self.pid.SetPoint = 170  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
+                            self.pid.SetPoint = 185  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
                             self.pid.update(lane_x)
                             if self.machine_type != "MentorPi_Acker":
                                 twist.angular.z = common.set_range(
