@@ -430,9 +430,7 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x = self.lane_detect(
                     binary_image, image.copy()
                 )
-                if (
-                    lane_x >= 0 and not self.stop and not self.start_delay
-                ):  # TODO 01 : 딜레이 조건 추가
+                if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if lane_x > 210 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
                         self.count_turn += 1
                         if (
@@ -532,7 +530,7 @@ class SelfDrivingNode(Node):
                     box_area = abs(i.box[0] - i.box[2]) * abs(
                         i.box[1] - i.box[3]
                     )  # TODO 00 : 박스 크기 계산
-                    if box_area > 100000:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
+                    if box_area > 5000:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
