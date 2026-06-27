@@ -105,6 +105,11 @@ class YoloV5Ros2(Node):
         scores = predictions[:, 4]
         categories = predictions[:, 5]
 
+        # [수정] 모든 검출 객체를 한 메시지에 모아 한 번만 발행하기 위해 for 루프 '전'에 초기화.
+        #   기존엔 루프 안에서 객체마다 따로 발행해, 구독자(self_driving)가 한 번에 1개 객체만 받아
+        #   crosswalk_distance 등이 0과 값 사이로 불안정하게 진동했음.
+        objects_info = []
+        h, w = image.shape[:2]
         for index in range(len(categories)):
             name = detect_result.names[int(categories[index])]
             detection2d = Detection2D()
@@ -141,9 +146,6 @@ class YoloV5Ros2(Node):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 cv2.waitKey(1)
 
-            objects_info = []
-            h, w = image.shape[:2]
-
             object_info = ObjectInfo()
             object_info.class_name = name
             object_info.box = [int(coord) for coord in [x1, y1, x2, y2]]
@@ -152,9 +154,11 @@ class YoloV5Ros2(Node):
             object_info.height = h
             objects_info.append(object_info)
 
-            object_msg = ObjectsInfo()
-            object_msg.objects = objects_info
-            self.object_pub.publish(object_msg)
+        # [수정] for 루프 '밖'에서 모든 객체를 한 번에 발행. 검출이 0개여도 빈 리스트를 발행해
+        #   구독자(self_driving)가 "이제 아무 객체도 없음"을 알 수 있게 함(표지판 사라지면 박스도 사라짐).
+        object_msg = ObjectsInfo()
+        object_msg.objects = objects_info
+        self.object_pub.publish(object_msg)
 
         # Display results if needed.
         if self.show_result:
