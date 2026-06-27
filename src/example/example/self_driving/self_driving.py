@@ -131,9 +131,10 @@ class SelfDrivingNode(Node):
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
         self.turn_threshold = 150
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
-        #   코너 안쪽으로 파고들면 절댓값 ↓(예: -0.38), 못 돌고 바깥으로 나가면 절댓값 ↑(예: -0.45).
-        #   [2단계] 우회전 시 안쪽 파고듦(오른쪽 바퀴가 선 넘음) 완화 위해 -0.45 → -0.40 으로 낮춤.
-        self.turn_angular_z = -0.40
+        #   코너 안쪽으로 파고들거나 너무 급히 돌면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
+        #   [2단계] -0.45 → -0.40 (안쪽 파고듦 완화)
+        #   [3단계] 코너를 너무 빨리(급하게) 도는 증상으로 -0.40 → -0.38 추가 완화.
+        self.turn_angular_z = -0.38
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
@@ -141,6 +142,14 @@ class SelfDrivingNode(Node):
         #   조향하지 않고 직진. 직선에서 아주 살짝씩 꼬물거리는 미세 진동(jitter)을 제거.
         #   [2단계] 증상: 미세 흔들림 → 값 ↑, 차선 복귀가 둔하면 → 값 ↓.
         self.lane_deadband = 6
+        # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
+        #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
+        self.turn_confirm_count = 5
+        # [3단계] turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
+        #   회전 직후 차선 중앙 복귀가 느려 한쪽으로 치우치면 ↓(예: 1.0),
+        #   복귀가 너무 빨라 회전이 덜 끝난 채 흔들리면 ↑(예: 2.0).
+        #   코너 후 치우침(증상3) 완화 위해 기존 2.0 → 1.5 로 단축.
+        self.turn_recover_time = 1.5
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -321,7 +330,7 @@ class SelfDrivingNode(Node):
                 if lane_x >= 0 and not self.stop:
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
-                        if self.count_turn > 5 and not self.start_turn:
+                        if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
@@ -331,7 +340,7 @@ class SelfDrivingNode(Node):
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
                         self.count_turn = 0
-                        if time.time() - self.start_turn_time_stamp > 2 and self.start_turn:
+                        if time.time() - self.start_turn_time_stamp > self.turn_recover_time and self.start_turn:  # [3단계] 회전 후 PID 복귀까지 유지 시간 (param_init의 turn_recover_time)
                             self.start_turn = False
                         if not self.start_turn:
                             self.pid.SetPoint = self.lane_setpoint  # [튜닝] 차선 중앙 목표점 (param_init의 lane_setpoint)
