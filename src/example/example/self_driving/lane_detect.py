@@ -162,12 +162,17 @@ class LaneDetector(object):
                 if center_x[i] > max_center_x:
                     max_center_x = center_x[i]
                 centroid_sum += center_x[i] * self.rois[i][-1]
+        # near_x: 가장 가까운 ROI(rois[0], 차 바로 앞)의 차선 중심 x.
+        #   max_center_x는 먼 ROI까지 포함한 최댓값이라, 차가 직선에 있어도 앞쪽 코너를
+        #   미리 감지해 회전이 너무 일찍 트리거됨. 가까운 ROI 기준 near_x를 회전/보정 판단에
+        #   쓰면 차가 진짜 코너에 도달한 시점에 반응함.
+        near_x = center_x[0] if len(center_x) > 0 else -1
         if centroid_sum == 0:
-            return result_image, None, max_center_x
+            return result_image, None, max_center_x, near_x
         center_pos = centroid_sum / self.weight_sum  # calculate the center point based on the proportion
         angle = math.degrees(-math.atan((center_pos - (w / 2.0)) / (h / 2.0)))
-        
-        return result_image, angle, max_center_x
+
+        return result_image, angle, max_center_x, near_x
 
 image_queue = queue.Queue(2)
 def image_callback(ros_image):
@@ -199,7 +204,7 @@ def main():
         cv2.fillPoly(binary_image, [np.array(roi)], [0, 0, 0])  # fill the top with black to avoid interference
         min_x = cv2.minMaxLoc(binary_image)[-1][0]
         cv2.line(img, (min_x, y), (640, y), (255, 255, 255), 50)  # draw a virtual line to guide the turning
-        result_image, angle, x = lane_detect(binary_image, image.copy()) 
+        result_image, angle, x, near_x = lane_detect(binary_image, image.copy())
         '''
         up, down = lane_detect.add_vertical_line_far(binary_image)
         #up, down, center = lane_detect.add_vertical_line_near(binary_image)

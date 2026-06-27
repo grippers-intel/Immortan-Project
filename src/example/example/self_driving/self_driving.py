@@ -327,10 +327,13 @@ class SelfDrivingNode(Node):
                         self.count_park = 0  
 
                 # line following processing
-                result_image, lane_angle, lane_x = self.lane_detect(binary_image, image.copy())  # the coordinate of the line while the robot is in the middle of the lane
-                # [튜닝 로그] 직선/코너에서의 실제 lane_x 값 확인용. turn_threshold 정밀 조정에 사용.
-                #   직선 주행 시 lane_x ≈ ? , 코너 진입 직전 lane_x ≈ ? 를 보고 그 사이 값으로 turn_threshold를 잡으면 됨.
-                self.get_logger().info('\033[1;36mlane_x=%d (turn_threshold=%d)\033[0m' % (lane_x, self.turn_threshold))
+                # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
+                #   기존 lane_x는 max_center_x(=far)로, 먼 ROI가 앞쪽 코너를 미리 봐서 회전이 너무 일찍 트리거됐음.
+                #   → lane_x 에 near 값을 받아 이후 로직(회전 threshold, PID)은 그대로 두고 판단 기준만 바꿈.
+                #   되돌리려면 lane_x_far 를 lane_x 로 받으면 기존 동작.
+                result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
+                # [튜닝 로그] near=회전판단 기준값, far=기존 max값. 직선/코너에서 두 값을 비교해 turn_threshold 확정.
+                self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 if lane_x >= 0 and not self.stop:
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
