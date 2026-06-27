@@ -61,7 +61,7 @@ def launch_setup(context):
             only_line_follow_arg,
             depth_camera_launch,
             controller_launch,
-            #web_video_server_node,
+            web_video_server_node,
             yolov5_node, 
             self_driving_node,
             ]
