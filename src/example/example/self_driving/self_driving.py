@@ -400,7 +400,10 @@ class SelfDrivingNode(Node):
                 #             self.start_slow_down = False
 
                 else:
-                    twist.linear.x = self.normal_speed  # go straight with normal speed
+                    self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
+                    twist.linear.x = self.drive_params["straight"][
+                        "linear_x"
+                    ]  # TODO 01 : 직진 속도 적용
 
                 # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
                 if 0 < self.park_x and 135 < self.crosswalk_distance:
