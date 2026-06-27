@@ -118,7 +118,8 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 150      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 로그 보고 조정.
+        self.crosswalk_stop_dist = 350      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+                                            #   (150→350: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0        # 정지 시작 시각
