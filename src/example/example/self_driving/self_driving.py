@@ -324,7 +324,7 @@ class SelfDrivingNode(Node):
                 if (
                     70 < self.crosswalk_distance and not self.start_slow_down
                 ):  # The robot starts to slow down only when it is close enough to the zebra crossing
-                    if self.crosswalk_count == 0:  # TODO 00 : 첫 번째 횡단보도만 정지
+                    if self.crosswalk_count % 2 == 0:  # TODO 00 : 짝수번째 정지
                         self.count_crosswalk += 1
                         if (
                             self.count_crosswalk == 3
@@ -334,8 +334,11 @@ class SelfDrivingNode(Node):
                             self.count_slow_down = (
                                 time.time()
                             )  # fixing time for slowing down
-                else:  # need to detect continuously, otherwise reset
-                    self.count_crosswalk = 0
+                    else:  # TODO 00 : 홀수번째 → 통과하면서 카운트 증가
+                        self.crosswalk_count += 1
+                else:
+                    if not self.start_slow_down:
+                        self.count_crosswalk = 0
 
                 # deceleration processing
                 # TODO 00 : 교차로 인식 시 일단 정지
@@ -435,8 +438,11 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x = self.lane_detect(
                     binary_image, image.copy()
                 )
+                self.get_logger().info(
+                    f"lane_x: {lane_x}"
+                )  # TODO 02 : 우회전 디버그 로그
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
-                    if lane_x > 210 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
+                    if lane_x > 185 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
                         self.count_turn += 1
                         if (
                             self.count_turn > 3 and not self.start_turn
