@@ -129,27 +129,28 @@ class SelfDrivingNode(Node):
         self.lane_setpoint = 130
         # turn_threshold: 급회전 진입 임계값. lane_x가 이 값보다 크면 코너로 판단해 고정 회전.
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
-        self.turn_threshold = 150
+        #   [다음단계] 코너 진입 전에 미리 꺾는 증상(차선이 조금만 오른쪽으로 가도 회전 트리거)
+        #             완화 위해 150 → 180 으로 올림. lane_setpoint(130)와의 간격을 넓혀
+        #             직선 구간에서 회전이 덜 트리거되게 함.
+        self.turn_threshold = 180
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
-        #   코너 안쪽으로 파고들거나 너무 급히 돌면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
-        #   [2단계] -0.45 → -0.40 (안쪽 파고듦 완화)
-        #   [3단계] 코너를 너무 빨리(급하게) 도는 증상으로 -0.40 → -0.38 추가 완화.
-        self.turn_angular_z = -0.38
+        #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
+        #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
+        self.turn_angular_z = -0.45
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
         # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
-        #   조향하지 않고 직진. 직선에서 아주 살짝씩 꼬물거리는 미세 진동(jitter)을 제거.
-        #   [2단계] 증상: 미세 흔들림 → 값 ↑, 차선 복귀가 둔하면 → 값 ↓.
-        self.lane_deadband = 6
+        #   조향하지 않고 직진(미세 진동 제거). 0이면 비활성(원래 동작).
+        #   [복원] 효과가 뚜렷하지 않아 6 → 0(비활성)으로 되돌림. 필요시 4~8로 재시도 가능.
+        self.lane_deadband = 0
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
         self.turn_confirm_count = 5
-        # [3단계] turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
-        #   회전 직후 차선 중앙 복귀가 느려 한쪽으로 치우치면 ↓(예: 1.0),
-        #   복귀가 너무 빨라 회전이 덜 끝난 채 흔들리면 ↑(예: 2.0).
-        #   코너 후 치우침(증상3) 완화 위해 기존 2.0 → 1.5 로 단축.
-        self.turn_recover_time = 1.5
+        # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
+        #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
+        #   [복원] 1.5 → 2.0(원래)으로 되돌림.
+        self.turn_recover_time = 2.0
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
