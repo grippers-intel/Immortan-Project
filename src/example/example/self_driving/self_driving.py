@@ -1,5 +1,3 @@
-# alex
-
 #!/usr/bin/env python3
 # encoding: utf-8
 # @data:2023/03/28
