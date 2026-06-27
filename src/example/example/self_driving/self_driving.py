@@ -135,12 +135,14 @@ class SelfDrivingNode(Node):
 
         # TODO-01 crosswalk에서 정지를 위한 파라미터
         self.crosswalk_stop = False
+        self.crosswalk_stop_done = False
+        self.crosswalk_stop_distance = 170
         self.crosswalk_stop_time = 2.0
         self.crosswalk_stop_start = 0
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.3  # normal driving speed
-        self.slow_down_speed = 0.1  # slowing down speed
+        self.normal_speed = 0.2  # normal driving speed
+        self.slow_down_speed = 0.2  # slowing down speed
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -277,38 +279,50 @@ class SelfDrivingNode(Node):
 
                 twist = Twist()
 
-                # if detecting the zebra crossing, start to slow down
+                # if detecting the zebra crossing, stop first and then slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
+                # TODO-02 hard coding -> soft coding
                 if (
-                    70 < self.crosswalk_distance and not self.start_slow_down
+                    self.crosswalk_distance > self.crosswalk_stop_distance
+                    and not self.crosswalk_stop
+                    and not self.crosswalk_stop_done
+                    and not self.start_slow_down
                 ):  # The robot starts to slow down only when it is close enough to the zebra crossing
                     self.count_crosswalk += 1
                     if (
                         self.count_crosswalk == 3
                     ):  # judge multiple times to prevent false detection
                         self.count_crosswalk = 0
-                        self.start_slow_down = True  # sign for slowing down
-                        self.count_slow_down = (
-                            time.time()
-                        )  # fixing time for slowing down
-                        # TODO-01 crosswalk 정지
+                        self.crosswalk_stop = True
+                        self.crosswalk_stop_start = time.time()
                         self.stop = True
                         self.mecanum_pub.publish(Twist())
-                        # TODO -01 crosswalk 정지 유지
-                        if (
-                            time.time() - self.crosswalk_stop_start
-                            > self.crosswalk_stop_time
-                        ):
-                            self.crosswalk_stop = False
-                            self.stop = False
-                            self.start_slow_down = True
-                            self.count_slow_down = time.time()
-
-                else:  # need to detect continuously, otherwise reset
+                # TODO-02 crosswalk 정지유지
+                elif (
+                    not self.crosswalk_stop
+                ):  # need to detect continuously, otherwise reset
                     self.count_crosswalk = 0
 
+                if self.crosswalk_distance == 0 and not self.crosswalk_stop:
+                    self.crosswalk_stop_done = False
+
+                if self.crosswalk_stop:
+                    self.mecanum_pub.publish(Twist())
+                    if (
+                        time.time() - self.crosswalk_stop_start
+                        > self.crosswalk_stop_time
+                    ):
+                        self.crosswalk_stop = False
+                        self.crosswalk_stop_done = True
+                        self.stop = False
+                        self.start_slow_down = True
+                        self.count_slow_down = time.time()
+
                 # deceleration processing
-                if self.start_slow_down:
+                # TODO-02 crosswalk 정지 추가
+                if self.crosswalk_stop:
+                    twist = Twist()
+                elif self.start_slow_down:
                     if self.traffic_signs_status is not None:
                         area = abs(
                             self.traffic_signs_status.box[0]
