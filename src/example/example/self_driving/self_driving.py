@@ -129,10 +129,10 @@ class SelfDrivingNode(Node):
         self.lane_setpoint = 130
         # turn_threshold: 급회전 진입 임계값. lane_x가 이 값보다 크면 코너로 판단해 고정 회전.
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
-        #   [다음단계] 코너 진입 전에 미리 꺾는 증상(차선이 조금만 오른쪽으로 가도 회전 트리거)
-        #             완화 위해 150 → 180 으로 올림. lane_setpoint(130)와의 간격을 넓혀
-        #             직선 구간에서 회전이 덜 트리거되게 함.
-        self.turn_threshold = 180
+        #   코너를 너무 빨리/일찍 도는 증상 → ↑ (진입 늦춤). lane_setpoint(130)보다 충분히 커야 함.
+        #   캘리브레이션 개선 후 150→180→200 으로 단계적 상향.
+        #   ※ 아래 main()의 lane_x 로그로 직선/코너 실제값을 보고 정밀 조정할 것.
+        self.turn_threshold = 200
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
@@ -328,6 +328,9 @@ class SelfDrivingNode(Node):
 
                 # line following processing
                 result_image, lane_angle, lane_x = self.lane_detect(binary_image, image.copy())  # the coordinate of the line while the robot is in the middle of the lane
+                # [튜닝 로그] 직선/코너에서의 실제 lane_x 값 확인용. turn_threshold 정밀 조정에 사용.
+                #   직선 주행 시 lane_x ≈ ? , 코너 진입 직전 lane_x ≈ ? 를 보고 그 사이 값으로 turn_threshold를 잡으면 됨.
+                self.get_logger().info('\033[1;36mlane_x=%d (turn_threshold=%d)\033[0m' % (lane_x, self.turn_threshold))
                 if lane_x >= 0 and not self.stop:
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
