@@ -454,6 +454,10 @@ class SelfDrivingNode(Node):
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
+                            self.start_slow_down = (
+                                False  # TODO 01 : 우회전 시작 시 횡단보도 플래그 리셋
+                            )
+                            self.stop = False  # TODO 01 : 정지 플래그 리셋
                     if self.start_turn:
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = self.drive_params["turn_right"][
