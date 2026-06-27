@@ -116,6 +116,14 @@ class SelfDrivingNode(Node):
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
+        # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
+        #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
+        self.crosswalk_stop_dist = 150      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 로그 보고 조정.
+        self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
+        self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
+        self.crosswalk_stop_time = 0        # 정지 시작 시각
+        self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
+
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.1  # normal driving speed
         self.slow_down_speed = 0.1  # slowing down speed
@@ -285,33 +293,35 @@ class SelfDrivingNode(Node):
 
                 twist = Twist()
 
-                # if detecting the zebra crossing, start to slow down
-                self.get_logger().info('\033[1;33m%s\033[0m' % self.crosswalk_distance)
-                if 70 < self.crosswalk_distance and not self.start_slow_down:  # The robot starts to slow down only when it is close enough to the zebra crossing
-                    self.count_crosswalk += 1
-                    if self.count_crosswalk == 3:  # judge multiple times to prevent false detection
-                        self.count_crosswalk = 0
-                        self.start_slow_down = True  # sign for slowing down
-                        self.count_slow_down = time.time()  # fixing time for slowing down
-                else:  # need to detect continuously, otherwise reset
-                    self.count_crosswalk = 0
+                # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
+                # [디버그 로그] crosswalk=거리, stopping=정지중, passed=통과처리됨, sign=신호등상태
+                self.get_logger().info('\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s\033[0m' % (
+                    self.crosswalk_distance, self.crosswalk_stopping, self.crosswalk_passed,
+                    self.traffic_signs_status.class_name if self.traffic_signs_status is not None else 'none'))
 
-                # deceleration processing
-                if self.start_slow_down:
-                    if self.traffic_signs_status is not None:
-                        area = abs(self.traffic_signs_status.box[0] - self.traffic_signs_status.box[2]) * abs(self.traffic_signs_status.box[1] - self.traffic_signs_status.box[3])
-                        if self.traffic_signs_status.class_name == 'red' and area < 1000:  # If the robot detects a red traffic light, it will stop
-                            self.mecanum_pub.publish(Twist())
-                            self.stop = True
-                        elif self.traffic_signs_status.class_name == 'green':  # If the traffic light is green, the robot will slow down and pass through
-                            twist.linear.x = self.slow_down_speed
-                            self.stop = False
-                    if not self.stop:  # In other cases where the robot is not stopped, slow down the speed and calculate the time needed to pass through the crosswalk. The time needed is equal to the length of the crosswalk divided by the driving speed
-                        twist.linear.x = self.slow_down_speed
-                        if time.time() - self.count_slow_down > self.crosswalk_length / twist.linear.x:
-                            self.start_slow_down = False
+                twist.linear.x = self.normal_speed  # 기본 직진 속도
+
+                if self.crosswalk_distance > self.crosswalk_stop_dist and not self.crosswalk_passed:
+                    # 횡단보도가 충분히 가까움 → 정지 단계
+                    if not self.crosswalk_stopping:
+                        self.crosswalk_stopping = True
+                        self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                    # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
+                    is_red = (self.traffic_signs_status is not None and self.traffic_signs_status.class_name == 'red')
+                    stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
+                    if stopped_enough and not is_red:
+                        self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
+                        self.crosswalk_stopping = False
+                        self.stop = False
+                    else:
+                        self.stop = True               # 정지 유지
+                        self.mecanum_pub.publish(Twist())
                 else:
-                    twist.linear.x = self.normal_speed  # go straight with normal speed
+                    # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
+                    if self.crosswalk_distance < 70:
+                        self.crosswalk_passed = False
+                        self.crosswalk_stopping = False
+                    self.stop = False
 
                 # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
                 if 0 < self.park_x and 135 < self.crosswalk_distance:
@@ -332,8 +342,8 @@ class SelfDrivingNode(Node):
                 #   → lane_x 에 near 값을 받아 이후 로직(회전 threshold, PID)은 그대로 두고 판단 기준만 바꿈.
                 #   되돌리려면 lane_x_far 를 lane_x 로 받으면 기존 동작.
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
-                # [튜닝 로그] near=회전판단 기준값, far=기존 max값. 직선/코너에서 두 값을 비교해 turn_threshold 확정.
-                self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
+                # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
+                # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 if lane_x >= 0 and not self.stop:
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
