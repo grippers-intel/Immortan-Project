@@ -127,14 +127,19 @@ class SelfDrivingNode(Node):
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
-        # TODO-00  crosswalk 픽셀 기준으로 판단하기 위한 파라미터
+        # TODO-01 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
         self.crosswalk_min_width = 80
         self.crosswalk_min_height = 20
         self.crosswalk_min_area = 3500
         self.crosswalk_min_aspect_ratio = 1.8
 
+        # TODO-01 crosswalk에서 정지를 위한 파라미터
+        self.crosswalk_stop = False
+        self.crosswalk_stop_time = 2.0
+        self.crosswalk_stop_start = 0
+
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.1  # normal driving speed
+        self.normal_speed = 0.3  # normal driving speed
         self.slow_down_speed = 0.1  # slowing down speed
 
         self.traffic_signs_status = None  # record the state of the traffic lights
@@ -286,6 +291,19 @@ class SelfDrivingNode(Node):
                         self.count_slow_down = (
                             time.time()
                         )  # fixing time for slowing down
+                        # TODO-01 crosswalk 정지
+                        self.stop = True
+                        self.mecanum_pub.publish(Twist())
+                        # TODO -01 crosswalk 정지 유지
+                        if (
+                            time.time() - self.crosswalk_stop_start
+                            > self.crosswalk_stop_time
+                        ):
+                            self.crosswalk_stop = False
+                            self.stop = False
+                            self.start_slow_down = True
+                            self.count_slow_down = time.time()
+
                 else:  # need to detect continuously, otherwise reset
                     self.count_crosswalk = 0
 

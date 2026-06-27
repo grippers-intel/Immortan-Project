@@ -45,11 +45,13 @@ cv2.line(img, (min_x + 50, y), (640, y), (255, 255, 255), 30)
 개선사항
 1. 신호등과 횡단보도 분리
 2. log가 안 나오고 멈춰있는 경우 -> build, log, install을 지우고 colcon build를 진행하면 되돌릴 수 있음
+3. ekf node8 시간지연 오류 관련 -> src/driver/controller/config 내의 ekf.yaml의 8행에 frequecny가 늦기 때문에 발생하는 오류이므로 frequency를 낮춰주면 가능함(현재 값: 100 -> 50)
 
-6/29
+6/29s
 TODO
 1. 우회전 & 라인 탐지 보이기만 하면 잘 찾지만 간헐적으로 못 찾는 현상이 있음
 2. 하드 코딩 되어 있는 부분 손 보기(count & distance)
 3. parking 구현하기
 4. 무한루프 break부분 구현(차선을 이탈했을 때 버벅이는 현상)
 5. 횡단보도 인식 부분 개선 -> yolo annotation을 진행해야 할 거 같음
+
