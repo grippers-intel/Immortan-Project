@@ -321,6 +321,10 @@ class SelfDrivingNode(Node):
 
                 # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
+                self.get_logger().info(
+                    f"crosswalk_count: {self.crosswalk_count}"
+                )  # TODO 00 : 횡단보도 카운트 디버그
+
                 if (
                     70 < self.crosswalk_distance and not self.start_slow_down
                 ):  # The robot starts to slow down only when it is close enough to the zebra crossing
@@ -442,7 +446,7 @@ class SelfDrivingNode(Node):
                     f"lane_x: {lane_x}"
                 )  # TODO 02 : 우회전 디버그 로그
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
-                    if lane_x > 185 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
+                    if lane_x > 220 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
                         self.count_turn += 1
                         if (
                             self.count_turn > 3 and not self.start_turn
