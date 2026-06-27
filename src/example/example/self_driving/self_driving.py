@@ -127,11 +127,12 @@ class SelfDrivingNode(Node):
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
-        # TODO-01 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
-        self.crosswalk_min_width = 80
-        self.crosswalk_min_height = 20
-        self.crosswalk_min_area = 3500
-        self.crosswalk_min_aspect_ratio = 1.8
+        # TODO-03 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
+        self.filter_crosswalk_by_size = False
+        self.crosswalk_min_width = 30
+        self.crosswalk_min_height = 10
+        self.crosswalk_min_area = 500
+        self.crosswalk_min_aspect_ratio = 0.8
 
         # TODO-01 crosswalk에서 정지를 위한 파라미터
         self.crosswalk_stop = False
@@ -150,6 +151,8 @@ class SelfDrivingNode(Node):
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
+        # TODO-03 log를 찍기 위한 파라미터
+        self.last_object_log_time = 0
 
     def get_node_state(self, request, response):
         response.success = True
@@ -458,11 +461,30 @@ class SelfDrivingNode(Node):
             and aspect_ratio >= self.crosswalk_min_aspect_ratio
         )
 
-    # TODO-00 crosswalk detecting 후 너무 작은 crosswalk 제외 하는 과정
+    # TODO-03 crosswalk detecting 후 너무 작은 crosswalk 제외 하는 과정
     def get_object_callback(self, msg):
         valid_objects = []
+        now = time.time()
+        if now - self.last_object_log_time > 1.0:
+            detected = [
+                "{}:{:.2f}:{}".format(i.class_name, i.score, list(i.box))
+                for i in msg.objects
+            ]
+            self.get_logger().info(
+                "\033[1;36mYOLO raw objects: %s\033[0m"
+                % (detected if detected else "none")
+            )
+            self.last_object_log_time = now
+
         for i in msg.objects:
-            if i.class_name == "crosswalk" and not self.is_valid_crosswalk(i.box):
+            if (
+                self.filter_crosswalk_by_size
+                and i.class_name == "crosswalk"
+                and not self.is_valid_crosswalk(i.box)
+            ):
+                self.get_logger().info(
+                    "\033[1;31mfiltered small crosswalk: %s\033[0m" % list(i.box)
+                )
                 continue
             valid_objects.append(i)
 
