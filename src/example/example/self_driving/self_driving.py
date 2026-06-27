@@ -152,6 +152,7 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
 
         self.count_crosswalk = 0
+        self.crosswalk_count = 0  # TODO 00 : 횡단보도 통과 횟수 카운트
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
@@ -323,15 +324,16 @@ class SelfDrivingNode(Node):
                 if (
                     70 < self.crosswalk_distance and not self.start_slow_down
                 ):  # The robot starts to slow down only when it is close enough to the zebra crossing
-                    self.count_crosswalk += 1
-                    if (
-                        self.count_crosswalk == 3
-                    ):  # judge multiple times to prevent false detection
-                        self.count_crosswalk = 0
-                        self.start_slow_down = True  # sign for slowing down
-                        self.count_slow_down = (
-                            time.time()
-                        )  # fixing time for slowing down
+                    if self.crosswalk_count == 0:  # TODO 00 : 첫 번째 횡단보도만 정지
+                        self.count_crosswalk += 1
+                        if (
+                            self.count_crosswalk == 3
+                        ):  # judge multiple times to prevent false detection
+                            self.count_crosswalk = 0
+                            self.start_slow_down = True  # sign for slowing down
+                            self.count_slow_down = (
+                                time.time()
+                            )  # fixing time for slowing down
                 else:  # need to detect continuously, otherwise reset
                     self.count_crosswalk = 0
 
@@ -377,6 +379,9 @@ class SelfDrivingNode(Node):
                             else:
                                 self.stop = False
                                 self.start_slow_down = False
+                                self.crosswalk_count += (
+                                    1  # TODO 00 : 횡단보도 통과 횟수 증가
+                                )
 
                     if not self.stop:
                         self.set_drive_mode("slow_down")  # TODO 01
