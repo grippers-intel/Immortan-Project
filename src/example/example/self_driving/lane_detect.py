@@ -272,7 +272,9 @@ def main():
         cv2.line(
             img, (min_x, y), (640, y), (255, 255, 255), 50
         )  # draw a virtual line to guide the turning
-        result_image, angle, x = lane_detect(binary_image, image.copy())
+        result_image, angle, x, center_x = lane_detect(
+            binary_image, image.copy()
+        )  # TODO 01 : center_x 추가
         """
         up, down = lane_detect.add_vertical_line_far(binary_image)
         #up, down, center = lane_detect.add_vertical_line_near(binary_image)
