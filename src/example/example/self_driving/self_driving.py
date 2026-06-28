@@ -152,7 +152,8 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
 
         self.count_crosswalk = 0
-        self.crosswalk_count = 0  # TODO 00 : 횡단보도 통과 횟수 카운트
+        self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
+        self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
@@ -321,25 +322,23 @@ class SelfDrivingNode(Node):
 
                 # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
-                self.get_logger().info(
-                    f"crosswalk_count: {self.crosswalk_count}"
-                )  # TODO 00 : 횡단보도 카운트 디버그
-
+                if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
+                    if time.time() - self.crosswalk_ignore_time > 2.5:
+                        self.crosswalk_ignore = False
                 if (
-                    70 < self.crosswalk_distance and not self.start_slow_down
-                ):  # The robot starts to slow down only when it is close enough to the zebra crossing
-                    if self.crosswalk_count % 2 == 0:  # TODO 00 : 짝수번째 정지
-                        self.count_crosswalk += 1
-                        if (
-                            self.count_crosswalk == 3
-                        ):  # judge multiple times to prevent false detection
-                            self.count_crosswalk = 0
-                            self.start_slow_down = True  # sign for slowing down
-                            self.count_slow_down = (
-                                time.time()
-                            )  # fixing time for slowing down
-                    else:  # TODO 00 : 홀수번째 → 통과하면서 카운트 증가
-                        self.crosswalk_count += 1
+                    70 < self.crosswalk_distance
+                    and not self.start_slow_down
+                    and not self.crosswalk_ignore
+                ):  # TODO 00 : ignore 조건 추가
+                    self.count_crosswalk += 1
+                    if (
+                        self.count_crosswalk == 3
+                    ):  # judge multiple times to prevent false detection
+                        self.count_crosswalk = 0
+                        self.start_slow_down = True  # sign for slowing down
+                        self.count_slow_down = (
+                            time.time()
+                        )  # fixing time for slowing down
                 else:
                     if not self.start_slow_down:
                         self.count_crosswalk = 0
@@ -372,6 +371,12 @@ class SelfDrivingNode(Node):
                         elif self.traffic_signs_status.class_name == "green":
                             self.stop = False  # 초록불이면 출발
                             self.start_slow_down = False
+                            self.crosswalk_distance = 0  # TODO 00 : 거리 초기화 → 추가
+                            self.crosswalk_ignore = True  # TODO 00 : 무시 시작 → 추가
+                            self.crosswalk_ignore_time = (
+                                time.time()
+                            )  # TODO 00 : 무시 시작 시간 → 추가
+
                     else:
                         # 신호등 없으면 1초 후 출발
                         if (
@@ -386,9 +391,15 @@ class SelfDrivingNode(Node):
                             else:
                                 self.stop = False
                                 self.start_slow_down = False
-                                self.crosswalk_count += (
-                                    1  # TODO 00 : 횡단보도 통과 횟수 증가
+                                self.crosswalk_distance = (
+                                    0  # TODO 00 : 거리 초기화 → 추가
                                 )
+                                self.crosswalk_ignore = (
+                                    True  # TODO 00 : 무시 시작 → 추가
+                                )
+                                self.crosswalk_ignore_time = (
+                                    time.time()
+                                )  # TODO 00 : 무시 시작 시간 → 추가
 
                     if not self.stop:
                         self.set_drive_mode("slow_down")  # TODO 01
@@ -439,18 +450,20 @@ class SelfDrivingNode(Node):
                         time.time() - self.start_delay_time > 3.0
                     ):  # TODO 01 : 3초 후 딜레이 해제
                         self.start_delay = False
-                result_image, lane_angle, lane_x = self.lane_detect(
+                result_image, lane_angle, lane_x, center_x = self.lane_detect(
                     binary_image, image.copy()
-                )
+                )  # TODO 01 : center_x 추가
                 self.get_logger().info(
                     f"lane_x: {lane_x}"
                 )  # TODO 02 : 우회전 디버그 로그
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
-                    if lane_x > 220 or lane_x == -1:  # 얼마나 가까운지 or 사라졌는지
+                    if (
+                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
+                    ):  # TODO 01 : 4,5번 박스 동시에 없을 때 → 수정
                         self.count_turn += 1
                         if (
-                            self.count_turn > 3 and not self.start_turn
-                        ):  # 우회전이 얼마나 빨리 시작될지 7
+                            self.count_turn > 10 and not self.start_turn
+                        ):  # TODO 01 : 10프레임 연속 → 수정
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
@@ -458,6 +471,8 @@ class SelfDrivingNode(Node):
                                 False  # TODO 01 : 우회전 시작 시 횡단보도 플래그 리셋
                             )
                             self.stop = False  # TODO 01 : 정지 플래그 리셋
+                    else:
+                        self.count_turn = 0  # TODO 01 : else로 리셋 → 추가
                     if self.start_turn:
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = self.drive_params["turn_right"][
@@ -554,6 +569,9 @@ class SelfDrivingNode(Node):
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                             min_distance = center[1]
+                            self.get_logger().info(
+                                f"crosswalk box_area: {box_area}"
+                            )  # TODO 00 : 사이즈 로그 → 추가
                 elif class_name == "right":  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
