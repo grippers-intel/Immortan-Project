@@ -323,10 +323,10 @@ class SelfDrivingNode(Node):
                 # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
-                    if time.time() - self.crosswalk_ignore_time > 2.5:
+                    if time.time() - self.crosswalk_ignore_time > 3.0:
                         self.crosswalk_ignore = False
                 if (
-                    70 < self.crosswalk_distance
+                    150 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
                 ):  # TODO 00 : ignore 조건 추가
@@ -453,9 +453,11 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x, center_x = self.lane_detect(
                     binary_image, image.copy()
                 )  # TODO 01 : center_x 추가
+                self.get_logger().info(f"lane_x: {lane_x}")
+                # TODO 02 : 우회전 디버그 로그
                 self.get_logger().info(
-                    f"lane_x: {lane_x}"
-                )  # TODO 02 : 우회전 디버그 로그
+                    f"center_x: {center_x}"
+                )  # TODO 01 : 디버그 로그 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
