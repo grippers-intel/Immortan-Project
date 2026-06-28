@@ -450,6 +450,7 @@ class SelfDrivingNode(Node):
                         time.time() - self.start_delay_time > 3.0
                     ):  # TODO 01 : 3초 후 딜레이 해제
                         self.start_delay = False
+                    continue
                 result_image, lane_angle, lane_x, center_x = self.lane_detect(
                     binary_image, image.copy()
                 )  # TODO 01 : center_x 추가
@@ -460,7 +461,7 @@ class SelfDrivingNode(Node):
                 )  # TODO 01 : 디버그 로그 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[1] == -1
+                        len(center_x) >= 5 and center_x[1] == -1 and center_x[3] == -1
                     ):  # TODO 01 : 박스 2번 없을 때 우회전 감지
                         self.count_turn += 1
                         if (
