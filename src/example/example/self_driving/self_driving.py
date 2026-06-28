@@ -583,10 +583,12 @@ class SelfDrivingNode(Node):
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0
-                elif (
-                    class_name == "park"
-                ):  # obtain the center coordinate of the parking sign
-                    self.park_x = center[0]
+                elif class_name == "park":
+                    box_area = abs(i.box[0] - i.box[2]) * abs(
+                        i.box[1] - i.box[3]
+                    )  # TODO 00 : 박스 크기 계산
+                    if box_area > 1000:  # TODO 00 : 오인식 방지
+                        self.park_x = center[0]
                 elif (
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
