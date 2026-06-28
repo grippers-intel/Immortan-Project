@@ -323,10 +323,10 @@ class SelfDrivingNode(Node):
                 # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
-                    if time.time() - self.crosswalk_ignore_time > 3.0:
+                    if time.time() - self.crosswalk_ignore_time > 3.5:
                         self.crosswalk_ignore = False
                 if (
-                    150 < self.crosswalk_distance
+                    300 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
                 ):  # TODO 00 : ignore 조건 추가
@@ -460,8 +460,8 @@ class SelfDrivingNode(Node):
                 )  # TODO 01 : 디버그 로그 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
-                    ):  # TODO 01 : 4,5번 박스 동시에 없을 때 → 수정
+                        len(center_x) >= 5 and center_x[1] == -1
+                    ):  # TODO 01 : 박스 2번 없을 때 우회전 감지
                         self.count_turn += 1
                         if (
                             self.count_turn > 10 and not self.start_turn
