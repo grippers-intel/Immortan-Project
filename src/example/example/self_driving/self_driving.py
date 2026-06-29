@@ -322,12 +322,14 @@ class SelfDrivingNode(Node):
 
                 # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
-                self.get_logger().info(f"crosswalk_distance: {self.crosswalk_distance}, crosswalk_ignore: {self.crosswalk_ignore}")  # ← 추가
+                self.get_logger().info(
+                    f"crosswalk_distance: {self.crosswalk_distance}, crosswalk_ignore: {self.crosswalk_ignore}"
+                )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if time.time() - self.crosswalk_ignore_time > 3.5:
                         self.crosswalk_ignore = False
                 if (
-                    300 < self.crosswalk_distance
+                    150 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
                 ):  # TODO 00 : ignore 조건 추가
@@ -493,7 +495,8 @@ class SelfDrivingNode(Node):
 
                         if not self.start_turn:
                             self.pid.SetPoint = 185  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
-                            self.pid.update(lane_x)
+                            if lane_x is not None:  # TODO 01 : None 체크 추가
+                                self.pid.update(lane_x)
                             if self.machine_type != "MentorPi_Acker":
                                 twist.angular.z = common.set_range(
                                     self.pid.output, -0.1, 0.1
@@ -566,17 +569,15 @@ class SelfDrivingNode(Node):
                 )
 
                 if class_name == "crosswalk":
-                    box_area = abs(i.box[0] - i.box[2]) * abs(
-                        i.box[1] - i.box[3]
-                    )  # TODO 00 : 박스 크기 계산
-                    if box_area > 5000:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
+                    box_height = abs(i.box[1] - i.box[3])  # TODO 00 : 박스 높이 계산
+                    if box_height > 30:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                             min_distance = center[1]
                             self.get_logger().info(
-                                f"crosswalk box_area: {box_area}"
-                            )  # TODO 00 : 사이즈 로그 → 추가
+                                f"crosswalk box_height: {box_height}"
+                            )  # TODO 00 : 높이 로그 → 추가
                 elif class_name == "right":  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
