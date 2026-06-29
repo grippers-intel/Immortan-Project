@@ -745,7 +745,9 @@ class SelfDrivingNode(Node):
 
                 else:
                     if (
-                        self.crosswalk_distance > self.crosswalk_stop_dist
+                        not self.start_park
+                        and not self.doing_turn_right
+                        and self.crosswalk_distance > self.crosswalk_stop_dist
                         and not self.crosswalk_passed
                     ):
                         # 횡단보도가 충분히 가까움 → 정지 단계
@@ -778,8 +780,9 @@ class SelfDrivingNode(Node):
                         if self.crosswalk_distance < 70:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
-                        self.stop = False
-                        self.stop_reason = None
+                        if self.stop_reason == "crosswalk":
+                            self.stop = False
+                            self.stop_reason = None
                 
                 self.get_logger().info(
                             "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
@@ -930,6 +933,7 @@ class SelfDrivingNode(Node):
     # Obtain the target detection result
     def get_object_callback(self, msg):
         self.objects_info = msg.objects
+        self.crosswalk_distance = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
