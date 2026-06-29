@@ -533,6 +533,7 @@ class SelfDrivingNode(Node):
         self.last_park_detect = False
         self.count_park = 0
         self.stop = False  # stopping sign
+        self.stop_reason = None #TODO: stop 이유 추가 
         self.start_park = False  # start parking sign 했는지 안했는지 여부
 
         self.count_crosswalk = 0
@@ -766,8 +767,10 @@ class SelfDrivingNode(Node):
                             )
                             self.crosswalk_stopping = False
                             self.stop = False
+                            self.stop_reason = None
                         else:
                             self.stop = True  # 정지 유지
+                            self.stop_reason = "crosswalk"
                             self.mecanum_pub.publish(Twist())
                     else:
                         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
@@ -775,13 +778,28 @@ class SelfDrivingNode(Node):
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
                         self.stop = False
+                        self.stop_reason = None
 
-                #TODO: park_x 인식 조건 추가 
-                if not self.start_park: 
+                # [주차 전 정지 원인 확인]
+                if not self.start_park:
                     if self.park_x > 0 and self.park_area > self.park_area_threshold:
                         self.count_park += 1
+                    else:
+                        self.count_park = 0
+
                     if self.count_park >= 10:
                         self.start_park = True
+                        self.stop = True
+                        self.stop_reason = "park"
+                        self.get_logger().info(
+                            "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
+                            % (
+                                self.stop_reason,
+                                self.park_x,
+                                self.park_area,
+                                self.count_park,
+                            )
+                        )
                         self.mecanum_pub.publish(Twist())
                         threading.Thread(target=self.park_action, daemon=True).start()
                         self.shutdown()
