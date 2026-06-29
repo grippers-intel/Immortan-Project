@@ -487,20 +487,24 @@ class SelfDrivingNode(Node):
 
                         if not self.start_turn:
                             self.pid.SetPoint = 185  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
-                            if lane_x is not None:  # TODO 01 : None 체크 추가
+                            if (
+                                lane_x is not None and lane_x > 0
+                            ):  # 차선 보일 때만 PID 적용
                                 self.pid.update(lane_x)
-                            if self.machine_type != "MentorPi_Acker":
-                                twist.angular.z = common.set_range(
-                                    self.pid.output, -0.1, 0.1
-                                )
-                            else:
-                                twist.angular.z = (
-                                    twist.linear.x
-                                    * math.tan(
-                                        common.set_range(self.pid.output, -0.1, 0.1)
+                                if self.machine_type != "MentorPi_Acker":
+                                    twist.angular.z = common.set_range(
+                                        self.pid.output, -0.1, 0.1
                                     )
-                                    / 0.145
-                                )
+                                else:
+                                    twist.angular.z = (
+                                        twist.linear.x
+                                        * math.tan(
+                                            common.set_range(self.pid.output, -0.1, 0.1)
+                                        )
+                                        / 0.145
+                                    )
+                            else:
+                                self.pid.clear()
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
@@ -553,6 +557,7 @@ class SelfDrivingNode(Node):
             self.crosswalk_distance = 0
         else:
             min_distance = 0
+            found_traffic_light = False
             for i in self.objects_info:
                 class_name = i.class_name
                 center = (
@@ -588,6 +593,10 @@ class SelfDrivingNode(Node):
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
                     self.traffic_signs_status = i
+                    found_traffic_light = True
+
+            if not found_traffic_light:
+                self.traffic_signs_status = None
 
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             self.crosswalk_distance = min_distance
