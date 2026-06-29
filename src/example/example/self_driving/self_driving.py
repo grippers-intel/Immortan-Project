@@ -559,13 +559,13 @@ class SelfDrivingNode(Node):
         #
         # lane_setpoint: 로봇이 차선 중앙일 때의 목표 lane_x 픽셀값(PID 목표점).
         #   값을 키우면 차가 더 오른쪽, 줄이면 더 왼쪽으로 붙어 주행함.
-        self.lane_setpoint = 130
+        self.lane_setpoint = 140
         # turn_threshold: 급회전 진입 임계값. lane_x가 이 값보다 크면 코너로 판단해 고정 회전.
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
         #   코너를 너무 빨리/일찍 도는 증상 → ↑ (진입 늦춤). lane_setpoint(130)보다 충분히 커야 함.
         #   캘리브레이션 개선 후 150→180→200 으로 단계적 상향.
         #   ※ 아래 main()의 lane_x 로그로 직선/코너 실제값을 보고 정밀 조정할 것.
-        self.turn_threshold = 210
+        self.turn_threshold = 200
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
@@ -579,7 +579,7 @@ class SelfDrivingNode(Node):
         self.lane_deadband = 0
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
-        self.turn_confirm_count = 7 #TODO: 5->7
+        self.turn_confirm_count = 5 #TODO: 5->7
         # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
         #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
         #   [복원] 1.5 → 2.0(원래)으로 되돌림.
