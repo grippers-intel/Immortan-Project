@@ -313,6 +313,17 @@ class SelfDrivingNode(Node):
 
             result_image = image.copy()
             if self.start:
+                # TODO 01 : 시작 딜레이를 가장 먼저 체크
+                if self.start_delay:
+                    if time.time() - self.start_delay_time > 3.0:
+                        self.start_delay = False
+                        self.get_logger().info(
+                            "\033[1;32m%s\033[0m" % "start_delay 해제 - 주행 시작!"
+                        )
+                    else:
+                        self.mecanum_pub.publish(Twist())  # 명시적으로 정지 명령
+                        continue
+
                 h, w = image.shape[:2]
 
                 # obtain the binary image of the lane
@@ -411,20 +422,6 @@ class SelfDrivingNode(Node):
                         ]  # TODO 01
                         # twist.linear.x = self.slow_down_speed
 
-                # if self.start_slow_down:
-                #     if self.traffic_signs_status is not None:
-                #         area = abs(self.traffic_signs_status.box[0] - self.traffic_signs_status.box[2]) * abs(self.traffic_signs_status.box[1] - self.traffic_signs_status.box[3])
-                #         if self.traffic_signs_status.class_name == 'red' and area < 1000:  # If the robot detects a red traffic light, it will stop
-                #             self.mecanum_pub.publish(Twist())
-                #             self.stop = True
-                #         elif self.traffic_signs_status.class_name == 'green':  # If the traffic light is green, the robot will slow down and pass through
-                #             twist.linear.x = self.slow_down_speed
-                #             self.stop = False
-                #     if not self.stop:  # In other cases where the robot is not stopped, slow down the speed and calculate the time needed to pass through the crosswalk. The time needed is equal to the length of the crosswalk divided by the driving speed
-                #         twist.linear.x = self.slow_down_speed
-                #         if time.time() - self.count_slow_down > self.crosswalk_length / twist.linear.x:
-                #             self.start_slow_down = False
-
                 else:
                     self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
                     twist.linear.x = self.drive_params["straight"][
@@ -447,14 +444,6 @@ class SelfDrivingNode(Node):
                         self.count_park = 0
 
                 # line following processing
-                # TODO 01 : 시작 딜레이 체크
-                if self.start_delay:
-                    if (
-                        time.time() - self.start_delay_time > 3.0
-                    ):  # TODO 01 : 3초 후 딜레이 해제
-                        self.start_delay = False
-                    else:
-                        continue
                 result_image, lane_angle, lane_x, center_x = self.lane_detect(
                     binary_image, image.copy()
                 )  # TODO 01 : center_x 추가
