@@ -98,6 +98,8 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
+        self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
+        self.park_min_area = 3000  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -111,7 +113,7 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
-        self.turn_right_forward_time = 1.0  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+        self.turn_right_forward_time = 1.5  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
         self.turn_right_duration = 3.0   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
 
         self.last_park_detect = False
@@ -351,18 +353,24 @@ class SelfDrivingNode(Node):
                         self.crosswalk_stopping = False
                     self.stop = False
 
-                # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
-                if 0 < self.park_x and 135 < self.crosswalk_distance:
+                # [수정] 주차 표지판 검출 시 처리. 기존엔 crosswalk_distance에만 의존해
+                #   표지판을 멀리서 보기만 해도 주차했음 → 표지판 박스 면적(park_area=거리지표)으로 게이트.
+                # [디버그 로그] 주차 표지판 보일 때 면적 출력 → park_min_area 튜닝용.
+                if 0 < self.park_x:
+                    self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
+                        self.park_x, self.park_area, self.park_min_area))
+                if 0 < self.park_x and self.park_area > self.park_min_area:
+                    # 표지판에 충분히 가까움 → 감속하며 주차 준비
                     twist.linear.x = self.slow_down_speed
-                    if not self.start_park and 180 < self.crosswalk_distance:  # When the robot is close enough to the crosswalk, it will start parking
-                        self.count_park += 1  
-                        if self.count_park >= 15:  
-                            self.mecanum_pub.publish(Twist())  
+                    if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
+                        self.count_park += 1
+                        if self.count_park >= 15:  # 연속 15프레임 가까우면 주차 동작 시작
+                            self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
                             threading.Thread(target=self.park_action).start()
-                    else:
-                        self.count_park = 0  
+                else:
+                    self.count_park = 0
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
@@ -445,6 +453,9 @@ class SelfDrivingNode(Node):
     # Obtain the target detection result
     def get_object_callback(self, msg):
         self.objects_info = msg.objects
+        # [수정] 주차 표지판은 매 프레임 새로 판단(사라지면 0으로). 멀리서 한 번 본 값이 남아 오작동하던 문제 방지.
+        self.park_x = -1
+        self.park_area = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
@@ -465,6 +476,8 @@ class SelfDrivingNode(Node):
                         self.count_right = 0
                 elif class_name == 'park':  # obtain the center coordinate of the parking sign
                     self.park_x = center[0]
+                    # [수정] 박스 면적 = 가로*세로. 표지판에 가까울수록 큼 → 거리 지표로 사용.
+                    self.park_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                
