@@ -28,12 +28,6 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState
 
-<<<<<<< HEAD
-# TODO : LED 구현
-from gpiozero import LED
-
-=======
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
 
 class SelfDrivingNode(Node):
     def __init__(self, name):
@@ -56,10 +50,6 @@ class SelfDrivingNode(Node):
         self.bridge = CvBridge()
         self.lock = threading.RLock()
         self.colors = common.Colors()
-<<<<<<< HEAD
-=======
-        # signal.signal(signal.SIGINT, self.shutdown)
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
         self.machine_type = os.environ.get("MACHINE_TYPE")
         self.lane_detect = lane_detect.LaneDetector("yellow")
 
@@ -69,18 +59,11 @@ class SelfDrivingNode(Node):
         )
         self.result_publisher = self.create_publisher(Image, "~/image_result", 1)
 
-<<<<<<< HEAD
-        self.create_service(Trigger, "~/enter", self.enter_srv_callback)
-        self.create_service(Trigger, "~/exit", self.exit_srv_callback)  # exit the game
-        self.create_service(SetBool, "~/set_running", self.set_running_srv_callback)
-=======
         self.create_service(
             Trigger, "~/enter", self.enter_srv_callback
         )  # enter the game
         self.create_service(Trigger, "~/exit", self.exit_srv_callback)  # exit the game
         self.create_service(SetBool, "~/set_running", self.set_running_srv_callback)
-        # self.heart = Heart(self.name + '/heartbeat', 5, lambda _: self.exit_srv_callback(None))
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
         timer_cb_group = ReentrantCallbackGroup()
         self.client = self.create_client(Trigger, "/yolov5_ros2/init_finish")
         self.client.wait_for_service()
@@ -112,10 +95,6 @@ class SelfDrivingNode(Node):
             request.data = True
             self.set_running_srv_callback(request, SetBool.Response())
 
-<<<<<<< HEAD
-=======
-        # self.park_action()
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
         threading.Thread(target=self.main, daemon=True).start()
         self.create_service(Trigger, "~/init_finish", self.get_node_state)
         self.get_logger().info("\033[1;32m%s\033[0m" % "start")
@@ -127,7 +106,6 @@ class SelfDrivingNode(Node):
 
         self.have_turn_right = False
         self.detect_turn_right = False
-        self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
 
         self.start_turn_time_stamp = 0
@@ -142,53 +120,33 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = (
             False  # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         )
-        self.turn_right_speed = 0.05  # 우회전 시 전진 속도
+        self.turn_right_speed = 0.15  # 우회전 시 전진 속도
         self.turn_right_angular = (
-            -0.7
+            -0.5
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         self.turn_right_duration = (
-            2.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            3.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
 
-        self.last_park_detect = False
         self.count_park = 0
         self.stop = False  # stopping sign
         self.start_park = False  # start parking sign
+        self.park_area = 0
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
-        self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
-        # TODO-03 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
-        self.filter_crosswalk_by_size = False
-        self.crosswalk_min_width = 30
-        self.crosswalk_min_height = 10
-        self.crosswalk_min_area = 500
-        self.crosswalk_min_aspect_ratio = 0.8
-
-        # TODO-01 crosswalk에서 정지를 위한 파라미터
-        self.crosswalk_stop = False
-        self.crosswalk_stop_done = False
-        self.crosswalk_stop_distance = 170
-        self.crosswalk_stop_time = 2.0
-        self.crosswalk_stop_start = 0
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 200  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-        # TODO : (150→200: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
+        self.crosswalk_stop_dist = 250  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-<<<<<<< HEAD
         self.normal_speed = 0.3  # normal driving speed
         self.slow_down_speed = 0.1  # slowing down speed
-=======
-        self.normal_speed = 0.2  # normal driving speed
-        self.slow_down_speed = 0.2  # slowing down speed
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
         # 기존에 main() 안에 하드코딩되어 있던 값들을 여기로 모음. 동작은 기존과 동일.
@@ -206,7 +164,7 @@ class SelfDrivingNode(Node):
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
-        self.turn_angular_z = -0.8
+        self.turn_angular_z = -0.45
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
@@ -227,8 +185,6 @@ class SelfDrivingNode(Node):
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
-        # TODO-03 log를 찍기 위한 파라미터
-        self.last_object_log_time = 0
 
     def get_node_state(self, request, response):
         response.success = True
@@ -299,69 +255,28 @@ class SelfDrivingNode(Node):
     def park_action(self):
         if self.machine_type == "MentorPi_Mecanum":
             twist = Twist()
-            twist.linear.x = 0.0
             twist.linear.y = -0.2
             self.mecanum_pub.publish(twist)
             time.sleep(0.38 / 0.2)
-<<<<<<< HEAD
-=======
-        elif self.machine_type == "MentorPi_Acker":
-            twist = Twist()
-            twist.linear.x = 0.15
-            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(3)
-
-            twist = Twist()
-            twist.linear.x = 0.15
-            twist.angular.z = -twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(2)
-
-            twist = Twist()
-            twist.linear.x = -0.15
-            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
-
-        else:
-            twist = Twist()
-            twist.angular.z = -1
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
-            self.mecanum_pub.publish(Twist())
-            twist = Twist()
-            twist.linear.x = 0.2
-            self.mecanum_pub.publish(twist)
-            time.sleep(0.65 / 0.2)
-            self.mecanum_pub.publish(Twist())
-            twist = Twist()
-            twist.angular.z = 1
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
         self.mecanum_pub.publish(Twist())
+        self.shutdown()
 
-    # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행).
-    # TODO : park_action처럼 별도 스레드로 동작.
+    # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
         twist = Twist()
-
-        # HARD - 횡단보도 정차 후 직진
-        twist.linear.x = self.normal_speed
+        twist.linear.x = self.turn_right_speed  # 전진하며
         self.mecanum_pub.publish(twist)
         time.sleep(1)
-
-        # HARD - 우회전
-        twist.linear.x = self.turn_right_speed  # 전진하며
+        twist.linear.x = self.turn_right_speed
         twist.angular.z = self.turn_right_angular  # 우회전
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())  # 정지
-        # self.doing_turn_right = False  # 차선추종 재개
-        self.have_turn_right = True
+        self.doing_turn_right = False  # 차선추종 재개
 
     def main(self):
+        park = threading.Thread(target=self.park_action)
+        right = threading.Thread(target=self.turn_right_action)
         while self.is_running:
             time_start = time.time()
             try:
@@ -381,7 +296,6 @@ class SelfDrivingNode(Node):
 
                 twist = Twist()
 
-<<<<<<< HEAD
                 # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
                 # [디버그 로그] crosswalk=거리, stopping=정지중, passed=통과처리됨, sign=신호등상태
                 self.get_logger().info(
@@ -400,69 +314,54 @@ class SelfDrivingNode(Node):
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
-                # TODO : 우회전 표지 감지 시 Parking까지 수행 후 shutdown
-
-                if self.turn_right and not self.doing_turn_right:
-                    self.mecanum_pub.publish(Twist())
-                    time.sleep(1)
-                    self.turn_right = False
-                    self.doing_turn_right = True
-                    self.turn_right_action()
-                    twist.linear.x = self.normal_speed
-                    self.mecanum_pub.publish(twist)
-                    time.sleep(6)
-                    self.park_action()
-                    self.shutdown()
-
-                else:
-                    if (
-                        self.crosswalk_distance > self.crosswalk_stop_dist
-                        and not self.crosswalk_passed
-                    ):
-                        # 횡단보도가 충분히 가까움 → 정지 단계
-                        if not self.crosswalk_stopping:
-                            self.crosswalk_stopping = True
-                            self.crosswalk_stop_time = (
-                                time.time()
-                            )  # 정지 시작 시각 기록
-                        # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
-                        is_red = (
-                            self.traffic_signs_status is not None
-                            and self.traffic_signs_status.class_name == "red"
+                if (
+                    self.crosswalk_distance > self.crosswalk_stop_dist
+                    and not self.crosswalk_passed
+                ):
+                    # 횡단보도가 충분히 가까움 → 정지 단계
+                    if not self.crosswalk_stopping:
+                        self.crosswalk_stopping = True
+                        self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                    # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
+                    is_red = (
+                        self.traffic_signs_status is not None
+                        and self.traffic_signs_status.class_name == "red"
+                    )
+                    stopped_enough = (
+                        time.time() - self.crosswalk_stop_time
+                    ) > self.crosswalk_stop_duration
+                    if stopped_enough and not is_red:
+                        self.crosswalk_passed = (
+                            True  # 통과 허용 → 이후 차선추종으로 진행
                         )
-                        stopped_enough = (
-                            time.time() - self.crosswalk_stop_time
-                        ) > self.crosswalk_stop_duration
-                        if stopped_enough and not is_red:
-                            self.crosswalk_passed = (
-                                True  # 통과 허용 → 이후 차선추종으로 진행
-                            )
-                            self.crosswalk_stopping = False
-                            self.stop = False
-                        else:
-                            self.stop = True  # 정지 유지
-                            self.mecanum_pub.publish(Twist())
-                    else:
-                        # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
-                        if self.crosswalk_distance < 70:
-                            self.crosswalk_passed = False
-                            self.crosswalk_stopping = False
+                        self.crosswalk_stopping = False
                         self.stop = False
+                        # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
+                        if self.turn_right and not self.doing_turn_right:
+                            self.turn_right = False
+                            self.doing_turn_right = True
+                            right.start()
+                    else:
+                        self.stop = True  # 정지 유지
+                        self.mecanum_pub.publish(Twist())
+                else:
+                    # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
+                    if self.crosswalk_distance < 70:
+                        self.crosswalk_passed = False
+                        self.crosswalk_stopping = False
+                    self.stop = False
 
-                # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
-                # if 0 < self.park_x and 135 < self.crosswalk_distance:
-                #     twist.linear.x = self.slow_down_speed
-                #     if (
-                #         not self.start_park and 180 < self.crosswalk_distance
-                #     ):  # When the robot is close enough to the crosswalk, it will start parking
-                #         self.count_park += 1
-                #         if self.count_park >= 15:
-                #             self.mecanum_pub.publish(Twist())
-                #             self.start_park = True
-                #             self.stop = True
-                #             threading.Thread(target=self.park_action).start()
-                #     else:
-                #         self.count_park = 0
+                # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
+                if 0 < self.park_x and self.park_area > 3000:
+                    twist.linear.x = self.slow_down_speed
+                    self.count_park += 1
+                    if self.count_park >= 15:
+                        self.mecanum_pub.publish(Twist())
+                        self.start_park = True
+                        self.stop = True
+                        park.start()
+                    else:
+                        self.count_park = 0
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
@@ -475,109 +374,14 @@ class SelfDrivingNode(Node):
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 if (
-                    lane_x >= 0 and not self.stop and not self.doing_turn_right
+                    lane_x >= 0
+                    and not self.stop
+                    and not self.doing_turn_right
+                    and not self.start_park
                 ):  # 우회전 동작 중엔 차선추종 양보
                     if (
                         lane_x > self.turn_threshold
                     ):  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
-=======
-                # if detecting the zebra crossing, stop first and then slow down
-                self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
-                # TODO-02 hard coding -> soft coding
-                if (
-                    self.crosswalk_distance > self.crosswalk_stop_distance
-                    and not self.crosswalk_stop
-                    and not self.crosswalk_stop_done
-                    and not self.start_slow_down
-                ):  # The robot starts to slow down only when it is close enough to the zebra crossing
-                    self.count_crosswalk += 1
-                    if (
-                        self.count_crosswalk == 3
-                    ):  # judge multiple times to prevent false detection
-                        self.count_crosswalk = 0
-                        self.crosswalk_stop = True
-                        self.crosswalk_stop_start = time.time()
-                        self.stop = True
-                        self.mecanum_pub.publish(Twist())
-                # TODO-02 crosswalk 정지유지
-                elif (
-                    not self.crosswalk_stop
-                ):  # need to detect continuously, otherwise reset
-                    self.count_crosswalk = 0
-
-                if self.crosswalk_distance == 0 and not self.crosswalk_stop:
-                    self.crosswalk_stop_done = False
-
-                if self.crosswalk_stop:
-                    self.mecanum_pub.publish(Twist())
-                    if (
-                        time.time() - self.crosswalk_stop_start
-                        > self.crosswalk_stop_time
-                    ):
-                        self.crosswalk_stop = False
-                        self.crosswalk_stop_done = True
-                        self.stop = False
-                        self.start_slow_down = True
-                        self.count_slow_down = time.time()
-
-                # deceleration processing
-                # TODO-02 crosswalk 정지 추가
-                if self.crosswalk_stop:
-                    twist = Twist()
-                elif self.start_slow_down:
-                    if self.traffic_signs_status is not None:
-                        area = abs(
-                            self.traffic_signs_status.box[0]
-                            - self.traffic_signs_status.box[2]
-                        ) * abs(
-                            self.traffic_signs_status.box[1]
-                            - self.traffic_signs_status.box[3]
-                        )
-                        if (
-                            self.traffic_signs_status.class_name == "red"
-                            and area < 1000
-                        ):  # If the robot detects a red traffic light, it will stop
-                            self.mecanum_pub.publish(Twist())
-                            self.stop = True
-                        elif (
-                            self.traffic_signs_status.class_name == "green"
-                        ):  # If the traffic light is green, the robot will slow down and pass through
-                            twist.linear.x = self.slow_down_speed
-                            self.stop = False
-                    if (
-                        not self.stop
-                    ):  # In other cases where the robot is not stopped, slow down the speed and calculate the time needed to pass through the crosswalk. The time needed is equal to the length of the crosswalk divided by the driving speed
-                        twist.linear.x = self.slow_down_speed
-                        if (
-                            time.time() - self.count_slow_down
-                            > self.crosswalk_length / twist.linear.x
-                        ):
-                            self.start_slow_down = False
-                else:
-                    twist.linear.x = self.normal_speed  # go straight with normal speed
-
-                # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
-                if 0 < self.park_x and 135 < self.crosswalk_distance:
-                    twist.linear.x = self.slow_down_speed
-                    if (
-                        not self.start_park and 180 < self.crosswalk_distance
-                    ):  # When the robot is close enough to the crosswalk, it will start parking
-                        self.count_park += 1
-                        if self.count_park >= 15:
-                            self.mecanum_pub.publish(Twist())
-                            self.start_park = True
-                            self.stop = True
-                            threading.Thread(target=self.park_action).start()
-                    else:
-                        self.count_park = 0
-
-                # line following processing
-                result_image, lane_angle, lane_x = self.lane_detect(
-                    binary_image, image.copy()
-                )  # the coordinate of the line while the robot is in the middle of the lane
-                if lane_x >= 0 and not self.stop:
-                    if lane_x > 150:
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
                         self.count_turn += 1
                         if (
                             self.count_turn > self.turn_confirm_count
@@ -587,19 +391,14 @@ class SelfDrivingNode(Node):
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
                         if self.machine_type != "MentorPi_Acker":
-<<<<<<< HEAD
                             twist.angular.z = (
                                 self.turn_angular_z
                             )  # [튜닝] 고정 회전 각속도 (param_init의 turn_angular_z)
-=======
-                            twist.angular.z = -0.45  # turning speed
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
                         else:
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
                         self.count_turn = 0
                         if (
-<<<<<<< HEAD
                             time.time() - self.start_turn_time_stamp
                             > self.turn_recover_time
                             and self.start_turn
@@ -634,27 +433,6 @@ class SelfDrivingNode(Node):
                                         )
                                         / 0.145
                                     )
-=======
-                            time.time() - self.start_turn_time_stamp > 2
-                            and self.start_turn
-                        ):
-                            self.start_turn = False
-                        if not self.start_turn:
-                            self.pid.SetPoint = 130  # the coordinate of the line while the robot is in the middle of the lane
-                            self.pid.update(lane_x)
-                            if self.machine_type != "MentorPi_Acker":
-                                twist.angular.z = common.set_range(
-                                    self.pid.output, -0.1, 0.1
-                                )
-                            else:
-                                twist.angular.z = (
-                                    twist.linear.x
-                                    * math.tan(
-                                        common.set_range(self.pid.output, -0.1, 0.1)
-                                    )
-                                    / 0.145
-                                )
->>>>>>> 1b2f2dcff014a032ad20c0661c82a345d79478b6
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
@@ -689,53 +467,14 @@ class SelfDrivingNode(Node):
             time_d = 0.03 - (time.time() - time_start)
             if time_d > 0:
                 time.sleep(time_d)
-
         self.mecanum_pub.publish(Twist())
+        right.join()
+        park.join()
         rclpy.shutdown()
 
     # Obtain the target detection result
-    # TODO-00 crosswalk 픽셀 사이즈 계산
-    def is_valid_crosswalk(self, box):
-        width = abs(box[2] - box[0])
-        height = abs(box[3] - box[1])
-        area = width * height
-        aspect_ratio = width / height if height > 0 else 0
-
-        return (
-            width >= self.crosswalk_min_width
-            and height >= self.crosswalk_min_height
-            and area >= self.crosswalk_min_area
-            and aspect_ratio >= self.crosswalk_min_aspect_ratio
-        )
-
-    # TODO-03 crosswalk detecting 후 너무 작은 crosswalk 제외 하는 과정
     def get_object_callback(self, msg):
-        valid_objects = []
-        now = time.time()
-        if now - self.last_object_log_time > 1.0:
-            detected = [
-                "{}:{:.2f}:{}".format(i.class_name, i.score, list(i.box))
-                for i in msg.objects
-            ]
-            self.get_logger().info(
-                "\033[1;36mYOLO raw objects: %s\033[0m"
-                % (detected if detected else "none")
-            )
-            self.last_object_log_time = now
-
-        for i in msg.objects:
-            if (
-                self.filter_crosswalk_by_size
-                and i.class_name == "crosswalk"
-                and not self.is_valid_crosswalk(i.box)
-            ):
-                self.get_logger().info(
-                    "\033[1;31mfiltered small crosswalk: %s\033[0m" % list(i.box)
-                )
-                continue
-            valid_objects.append(i)
-
-        self.objects_info = valid_objects
+        self.objects_info = msg.objects
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
@@ -765,6 +504,10 @@ class SelfDrivingNode(Node):
                     class_name == "park"
                 ):  # obtain the center coordinate of the parking sign
                     self.park_x = center[0]
+                    box = i.box
+                    width = abs(box[2] - box[0])
+                    height = abs(box[3] - box[1])
+                    self.park_area = width * height
                 elif (
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
