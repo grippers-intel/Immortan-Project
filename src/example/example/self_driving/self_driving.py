@@ -506,6 +506,9 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
+        self.park_area = 0  # 현재 프레임에서 인식된 park 박스 면적(px^2)
+        self.park_area_threshold = 2000  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
+    
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -530,7 +533,7 @@ class SelfDrivingNode(Node):
         self.last_park_detect = False
         self.count_park = 0
         self.stop = False  # stopping sign
-        self.start_park = False  # start parking sign
+        self.start_park = False  # start parking sign 했는지 안했는지 여부
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
@@ -717,11 +720,12 @@ class SelfDrivingNode(Node):
                     )
                 )
                 self.get_logger().info(
-                    '\033[1;33mpark_x:%s crosswalk:%s count_park:%s\033[0m' 
+                    "\033[1;33mpark_x:%s crosswalk:%s count_park:%s park_area:%s\033[0m"
                     % (
                         self.park_x, 
                         self.crosswalk_distance,
-                        self.count_park))
+                        self.count_park,
+                        self.park_area)) #TODO:
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
@@ -774,11 +778,12 @@ class SelfDrivingNode(Node):
 
                 #TODO: park_x 인식 조건 추가 
                 if not self.start_park: 
-                    if self.park_x > 0:
+                    if self.park_x > 0 and self.park_area > self.park_area_threshold:
                         self.count_park += 1
                     if self.count_park >= 10:
                         self.start_park = True
-                        self.park_action()
+                        self.mecanum_pub.publish(Twist())
+                        threading.Thread(target=self.park_action, daemon=True).start()
                         self.shutdown()
 
                 # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
@@ -933,6 +938,11 @@ class SelfDrivingNode(Node):
                     class_name == "park"
                 ):  # obtain the center coordinate of the parking sign
                     self.park_x = center[0]
+                    box = i.box
+                    width = abs(box[2] - box[0])
+                    height = abs(box[3] - box[1])
+                    self.park_area = width * height
+
                 elif (
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
