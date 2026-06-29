@@ -164,7 +164,7 @@ class SelfDrivingNode(Node):
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
-        self.turn_angular_z = -0.45
+        self.turn_angular_z = -0.8
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
