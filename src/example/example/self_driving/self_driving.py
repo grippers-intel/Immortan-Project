@@ -99,7 +99,8 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        self.park_min_area = 3000  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+        self.park_min_area = 1500  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -240,7 +241,13 @@ class SelfDrivingNode(Node):
     
     # parking processing
     def park_action(self):
-        if self.machine_type == 'MentorPi_Mecanum': 
+        if self.machine_type == 'MentorPi_Mecanum':
+            # [추가] 주차 전 똑바로 1초 직진 — 주차칸 앞까지 더 들어간 뒤 옆으로 주차(우회전 동작과 동일 패턴)
+            twist = Twist()
+            twist.linear.x = self.normal_speed
+            self.mecanum_pub.publish(twist)
+            time.sleep(self.park_forward_time)
+            # 옆으로 이동(메카넘 횡이동)하여 주차칸에 진입
             twist = Twist()
             twist.linear.y = -0.2
             self.mecanum_pub.publish(twist)
