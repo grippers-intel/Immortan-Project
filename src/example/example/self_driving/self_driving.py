@@ -263,20 +263,25 @@ class SelfDrivingNode(Node):
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
-        twist = Twist()
-        twist.linear.x = self.turn_right_speed  # 전진하며
-        self.mecanum_pub.publish(twist)
-        time.sleep(1)
-        twist.linear.x = self.turn_right_speed
-        twist.angular.z = self.turn_right_angular  # 우회전
-        self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
-        self.mecanum_pub.publish(Twist())  # 정지
-        self.doing_turn_right = False  # 차선추종 재개
+        if self.turn_right and not self.doing_turn_right:
+            self.turn_right = False
+            self.doing_turn_right = True
+            twist = Twist()
+            twist.linear.x = self.turn_right_speed  # 전진하며
+            self.mecanum_pub.publish(twist)
+            time.sleep(1)
+            twist.linear.x = self.turn_right_speed
+            twist.angular.z = self.turn_right_angular  # 우회전
+            self.mecanum_pub.publish(twist)
+            time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
+            self.mecanum_pub.publish(Twist())  # 정지
+            self.doing_turn_right = False  # 차선추종 재개
 
     def main(self):
         park = threading.Thread(target=self.park_action)
         right = threading.Thread(target=self.turn_right_action)
+        park.start()
+        right.start()
         while self.is_running:
             time_start = time.time()
             try:
@@ -312,6 +317,9 @@ class SelfDrivingNode(Node):
                     )
                 )
 
+                if self.doing_turn_right or self.start_park:
+                    continue
+
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
                 if (
@@ -336,11 +344,6 @@ class SelfDrivingNode(Node):
                         )
                         self.crosswalk_stopping = False
                         self.stop = False
-                        # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
-                        if self.turn_right and not self.doing_turn_right:
-                            self.turn_right = False
-                            self.doing_turn_right = True
-                            right.start()
                     else:
                         self.stop = True  # 정지 유지
                         self.mecanum_pub.publish(Twist())
@@ -373,12 +376,7 @@ class SelfDrivingNode(Node):
                 )
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if (
-                    lane_x >= 0
-                    and not self.stop
-                    and not self.doing_turn_right
-                    and not self.start_park
-                ):  # 우회전 동작 중엔 차선추종 양보
+                if lane_x >= 0 and not self.stop:
                     if (
                         lane_x > self.turn_threshold
                     ):  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
@@ -439,6 +437,9 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
+                    twist.angular.z = 0.1
+                    self.mecanum_pub.publish(twist)
+                    time.sleep(0.05)
 
                 if self.objects_info:
                     for i in self.objects_info:
