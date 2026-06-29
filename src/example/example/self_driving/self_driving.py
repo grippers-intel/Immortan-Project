@@ -507,7 +507,7 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # 현재 프레임에서 인식된 park 박스 면적(px^2)
-        self.park_area_threshold = 2000  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
+        self.park_area_threshold = 1000  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
     
 
         self.start_turn_time_stamp = 0
@@ -665,6 +665,7 @@ class SelfDrivingNode(Node):
             self.mecanum_pub.publish(twist)
             time.sleep(0.38 / 0.2)
         self.mecanum_pub.publish(Twist())
+        self.shutdown()
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행).
     # TODO : park_action처럼 별도 스레드로 동작.
@@ -779,6 +780,17 @@ class SelfDrivingNode(Node):
                             self.crosswalk_stopping = False
                         self.stop = False
                         self.stop_reason = None
+                
+                self.get_logger().info(
+                            "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
+                            % (
+                                self.stop_reason,
+                                self.park_x,
+                                self.park_area,
+                                self.count_park,
+                            )
+                        )
+
 
                 # [주차 전 정지 원인 확인]
                 if not self.start_park:
@@ -790,18 +802,10 @@ class SelfDrivingNode(Node):
                         self.start_park = True
                         self.stop = True
                         self.stop_reason = "park"
-                        self.get_logger().info(
-                            "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
-                            % (
-                                self.stop_reason,
-                                self.park_x,
-                                self.park_area,
-                                self.count_park,
-                            )
-                        )
+                        self.count_park = 0
                         self.mecanum_pub.publish(Twist())
                         threading.Thread(target=self.park_action, daemon=True).start()
-                        self.shutdown()
+                        # self.shutdown()
 
                 # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
                 # if 0 < self.park_x and 135 < self.crosswalk_distance:
