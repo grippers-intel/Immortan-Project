@@ -486,7 +486,9 @@ class SelfDrivingNode(Node):
                         self.count_turn = 0
 
                         if not self.start_turn:
-                            self.pid.SetPoint = 185  # TODO 도로 중앙값 조절( 130 -> 170 좀더 왼쪽으로 붙어서감)
+                            self.pid.SetPoint = (
+                                160  # TODO 도로 중앙값 조절 (185=왼쪽치우침, 160=중앙)
+                            )
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
