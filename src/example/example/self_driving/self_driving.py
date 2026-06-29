@@ -426,7 +426,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState
 
 # TODO : LED 구현
-from gpiozero import LED
+# from gpiozero import LED
 
 
 class SelfDrivingNode(Node):
@@ -716,6 +716,12 @@ class SelfDrivingNode(Node):
                         ),
                     )
                 )
+                self.get_logger().info(
+                    '\033[1;33mpark_x:%s crosswalk:%s count_park:%s\033[0m' 
+                    % (
+                        self.park_x, 
+                        self.crosswalk_distance,
+                        self.count_park))
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
@@ -729,23 +735,7 @@ class SelfDrivingNode(Node):
                     self.turn_right_action()
                     twist.linear.x = self.normal_speed
                     self.mecanum_pub.publish(twist)
-                    time.sleep(6)
-
-                self.get_logger().info(
-                    '\033[1;33mpark_x:%s crosswalk:%s count_park:%s\033[0m' 
-                    % (
-                        self.park_x, 
-                        self.crosswalk_distance,
-                        self.count_park))
-                
-                #TODO: park_x 인식 조건 추가 
-                if not self.start_park: 
-                    if self.park_x > 0:
-                        self.count_park += 1
-                    if self.count_park >= 10:
-                        self.start_park = True
-                        self.park_action()
-                        self.shutdown()
+                    # time.sleep(6)
 
                 else:
                     if (
@@ -781,6 +771,15 @@ class SelfDrivingNode(Node):
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
                         self.stop = False
+
+                #TODO: park_x 인식 조건 추가 
+                if not self.start_park: 
+                    if self.park_x > 0:
+                        self.count_park += 1
+                    if self.count_park >= 10:
+                        self.start_park = True
+                        self.park_action()
+                        self.shutdown()
 
                 # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
                 # if 0 < self.park_x and 135 < self.crosswalk_distance:
