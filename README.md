@@ -42,6 +42,7 @@ cv2.line(img, (min_x + 50, y), (640, y), (255, 255, 255), 30)
 5. 시작할 때 초기값 세팅 방법(시작 프로세스 go로 설정)
 6. ros 구동 시 새로운 종료 방법 모색(컨트롤 c이외의 방법)
 
+<<<<<<< HEAD
 6/26
 개선사항
 1. 신호등과 횡단보도 분리
@@ -49,12 +50,20 @@ cv2.line(img, (min_x + 50, y), (640, y), (255, 255, 255), 30)
 3. ekf node8 시간지연 오류 관련 -> src/driver/controller/config 내의 ekf.yaml의 8행에 frequecny가 늦기 때문에 발생하는 오류이므로 frequency를 낮춰주면 가능함(현재 값: 100 -> 50)
 
 6/27~28
+=======
+개선사항
+1. 신호등과 횡단보도 분리
+2. log가 안 나오고 멈춰있는 경우 -> build, log, install을 지우고 colcon build를 진행하면 되돌릴 수 있음
+
+6/29
+>>>>>>> da16c21d1c28190d94edeef54db0da813ac0b4ae
 TODO
 1. 우회전 & 라인 탐지 보이기만 하면 잘 찾지만 간헐적으로 못 찾는 현상이 있음
 2. 하드 코딩 되어 있는 부분 손 보기(count & distance)
 3. parking 구현하기
 4. 무한루프 break부분 구현(차선을 이탈했을 때 버벅이는 현상)
 5. 횡단보도 인식 부분 개선 -> yolo annotation을 진행해야 할 거 같음
+<<<<<<< HEAD
 
 6/29 breifing & TODO
 1. lane detecting 후 좌편향 되어 주행하는 것
@@ -63,3 +72,5 @@ TODO
 4. 우회전, 주차 하드코딩
 5. 금요일 발표문서 정리(hease)
 6. 추가적인 git setting
+=======
+>>>>>>> da16c21d1c28190d94edeef54db0da813ac0b4ae
