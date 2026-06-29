@@ -111,6 +111,7 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
+        self.turn_right_forward_time = 1.0  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
         self.turn_right_duration = 3.0   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
 
         self.last_park_detect = False
@@ -282,9 +283,14 @@ class SelfDrivingNode(Node):
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
+        # 1단계: 회전 없이 똑바로 직진 — 교차로 안쪽까지 더 들어간 뒤 돌게 함(일찍 꺾임 방지)
         twist = Twist()
-        twist.linear.x = self.turn_right_speed     # 전진하며
-        twist.angular.z = self.turn_right_angular  # 우회전
+        twist.linear.x = self.turn_right_speed
+        twist.angular.z = 0.0
+        self.mecanum_pub.publish(twist)
+        time.sleep(self.turn_right_forward_time)
+        # 2단계: 전진하며 우회전
+        twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())          # 정지
