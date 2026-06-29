@@ -254,10 +254,11 @@ class SelfDrivingNode(Node):
     # parking processing
     def park_action(self):
         if self.machine_type == "MentorPi_Mecanum":
-            twist = Twist()
-            twist.linear.y = -0.2
-            self.mecanum_pub.publish(twist)
-            time.sleep(0.38 / 0.2)
+            if self.start_park:
+                twist = Twist()
+                twist.linear.y = -0.2
+                self.mecanum_pub.publish(twist)
+                time.sleep(0.38 / 0.2)
         self.mecanum_pub.publish(Twist())
         self.shutdown()
 
@@ -362,7 +363,6 @@ class SelfDrivingNode(Node):
                         self.mecanum_pub.publish(Twist())
                         self.start_park = True
                         self.stop = True
-                        park.start()
                     else:
                         self.count_park = 0
 
