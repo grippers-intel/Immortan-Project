@@ -784,9 +784,8 @@ class SelfDrivingNode(Node):
                 if not self.start_park:
                     if self.park_x > 0 and self.park_area > self.park_area_threshold:
                         self.count_park += 1
-                    else:
-                        self.count_park = 0
-
+                    # else:
+                    #     self.count_park = 0
                     if self.count_park >= 10:
                         self.start_park = True
                         self.stop = True
