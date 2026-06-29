@@ -579,7 +579,7 @@ class SelfDrivingNode(Node):
         self.lane_deadband = 0
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
-        self.turn_confirm_count = 5
+        self.turn_confirm_count = 7 #TODO: 5->7
         # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
         #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
         #   [복원] 1.5 → 2.0(원래)으로 되돌림.
