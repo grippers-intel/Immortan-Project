@@ -127,23 +127,15 @@ class SelfDrivingNode(Node):
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
-        # TODO-03 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
-        self.filter_crosswalk_by_size = False
-        self.crosswalk_min_width = 30
-        self.crosswalk_min_height = 10
-        self.crosswalk_min_area = 500
-        self.crosswalk_min_aspect_ratio = 0.8
-
-        # TODO-01 crosswalk에서 정지를 위한 파라미터
-        self.crosswalk_stop = False
-        self.crosswalk_stop_done = False
-        self.crosswalk_stop_distance = 170
-        self.crosswalk_stop_time = 2.0
-        self.crosswalk_stop_start = 0
+        # TODO-00  crosswalk 픽셀 기준으로 판단하기 위한 파라미터
+        self.crosswalk_min_width = 80
+        self.crosswalk_min_height = 20
+        self.crosswalk_min_area = 3500
+        self.crosswalk_min_aspect_ratio = 1.8
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.2  # normal driving speed
-        self.slow_down_speed = 0.2  # slowing down speed
+        self.normal_speed = 0.1  # normal driving speed
+        self.slow_down_speed = 0.1  # slowing down speed
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -151,8 +143,6 @@ class SelfDrivingNode(Node):
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
-        # TODO-03 log를 찍기 위한 파라미터
-        self.last_object_log_time = 0
 
     def get_node_state(self, request, response):
         response.success = True
@@ -282,50 +272,25 @@ class SelfDrivingNode(Node):
 
                 twist = Twist()
 
-                # if detecting the zebra crossing, stop first and then slow down
+                # if detecting the zebra crossing, start to slow down
                 self.get_logger().info("\033[1;33m%s\033[0m" % self.crosswalk_distance)
-                # TODO-02 hard coding -> soft coding
                 if (
-                    self.crosswalk_distance > self.crosswalk_stop_distance
-                    and not self.crosswalk_stop
-                    and not self.crosswalk_stop_done
-                    and not self.start_slow_down
+                    70 < self.crosswalk_distance and not self.start_slow_down
                 ):  # The robot starts to slow down only when it is close enough to the zebra crossing
                     self.count_crosswalk += 1
                     if (
                         self.count_crosswalk == 3
                     ):  # judge multiple times to prevent false detection
                         self.count_crosswalk = 0
-                        self.crosswalk_stop = True
-                        self.crosswalk_stop_start = time.time()
-                        self.stop = True
-                        self.mecanum_pub.publish(Twist())
-                # TODO-02 crosswalk 정지유지
-                elif (
-                    not self.crosswalk_stop
-                ):  # need to detect continuously, otherwise reset
+                        self.start_slow_down = True  # sign for slowing down
+                        self.count_slow_down = (
+                            time.time()
+                        )  # fixing time for slowing down
+                else:  # need to detect continuously, otherwise reset
                     self.count_crosswalk = 0
 
-                if self.crosswalk_distance == 0 and not self.crosswalk_stop:
-                    self.crosswalk_stop_done = False
-
-                if self.crosswalk_stop:
-                    self.mecanum_pub.publish(Twist())
-                    if (
-                        time.time() - self.crosswalk_stop_start
-                        > self.crosswalk_stop_time
-                    ):
-                        self.crosswalk_stop = False
-                        self.crosswalk_stop_done = True
-                        self.stop = False
-                        self.start_slow_down = True
-                        self.count_slow_down = time.time()
-
                 # deceleration processing
-                # TODO-02 crosswalk 정지 추가
-                if self.crosswalk_stop:
-                    twist = Twist()
-                elif self.start_slow_down:
+                if self.start_slow_down:
                     if self.traffic_signs_status is not None:
                         area = abs(
                             self.traffic_signs_status.box[0]
@@ -461,30 +426,11 @@ class SelfDrivingNode(Node):
             and aspect_ratio >= self.crosswalk_min_aspect_ratio
         )
 
-    # TODO-03 crosswalk detecting 후 너무 작은 crosswalk 제외 하는 과정
+    # TODO-00 crosswalk detecting 후 너무 작은 crosswalk 제외 하는 과정
     def get_object_callback(self, msg):
         valid_objects = []
-        now = time.time()
-        if now - self.last_object_log_time > 1.0:
-            detected = [
-                "{}:{:.2f}:{}".format(i.class_name, i.score, list(i.box))
-                for i in msg.objects
-            ]
-            self.get_logger().info(
-                "\033[1;36mYOLO raw objects: %s\033[0m"
-                % (detected if detected else "none")
-            )
-            self.last_object_log_time = now
-
         for i in msg.objects:
-            if (
-                self.filter_crosswalk_by_size
-                and i.class_name == "crosswalk"
-                and not self.is_valid_crosswalk(i.box)
-            ):
-                self.get_logger().info(
-                    "\033[1;31mfiltered small crosswalk: %s\033[0m" % list(i.box)
-                )
+            if i.class_name == "crosswalk" and not self.is_valid_crosswalk(i.box):
                 continue
             valid_objects.append(i)
 
