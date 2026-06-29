@@ -424,9 +424,7 @@ class SelfDrivingNode(Node):
 
                 else:
                     self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
-                    twist.linear.x = self.drive_params["straight"][
-                        "linear_x"
-                    ]  # TODO 01 : 직진 속도 적용
+                    # 속도는 차선 감지 후 아래에서 설정
 
                 # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
                 if 0 < self.park_x and 135 < self.crosswalk_distance:
@@ -452,6 +450,11 @@ class SelfDrivingNode(Node):
                 self.get_logger().info(
                     f"center_x: {center_x}"
                 )  # TODO 01 : 디버그 로그 추가
+
+                # 차선이 보일 때만 직진 속도 설정 (차선 없으면 정지 유지)
+                if not self.start_slow_down and lane_x is not None and lane_x > 0:
+                    twist.linear.x = self.drive_params["straight"]["linear_x"]
+
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5 and center_x[0] == -1 and center_x[2] == -1
