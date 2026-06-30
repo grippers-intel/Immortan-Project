@@ -462,11 +462,8 @@ class SelfDrivingNode(Node):
                 )  # TODO : 우회전 안되는 원인 추적용 → 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5
-                        and center_x[4] == -1
-                        and time.time() - self.start_delay_time
-                        > 5.0  # TODO : 시작 후 추가 2초(총 5초)간 회전 감지 보류 (시작 직후 박스5 오작동 방지)
-                    ):
+                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
+                    ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
                             self.count_turn > 5 and not self.start_turn
