@@ -120,6 +120,7 @@ class SelfDrivingNode(Node):
         self.count_right = 0
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
+        self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
 
         # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
         self.count_go = 0
@@ -581,11 +582,16 @@ class SelfDrivingNode(Node):
                         self.go_signal_time = time.time()
                         self.count_go = 0
                 elif class_name == 'right':  # obtain the right turning sign
-                    self.count_right += 1
-                    self.count_right_miss = 0
-                    if self.count_right >= 3:  # (5→3: 속도 2배+FPS저하로 표지판을 5번 못보고 지나쳐 우회전 미발동하던 문제)
-                        self.turn_right = True
-                        self.count_right = 0
+                    # [수정] 표지판이 '충분히 가까울 때'(박스 큼)만 카운트 → 멀리서 일찍 turn_right가 켜져
+                    #   엉뚱한 앞 코너에서 깜빡이가 켜지거나 일반 코너링이 우회전을 가로채던 문제 방지.
+                    right_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                    self.get_logger().info('\033[1;31mright sign area=%d (min=%d) count=%d\033[0m' % (
+                        right_area, self.right_min_area, self.count_right))
+                    if right_area >= self.right_min_area:
+                        self.count_right += 1
+                        if self.count_right >= 3:
+                            self.turn_right = True
+                            self.count_right = 0
                 elif class_name == 'park':  # obtain the center coordinate of the parking sign
                     # [수정] 박스 면적 = 가로*세로. 표지판에 가까울수록 큼 → 거리 지표로 사용.
                     #   한 프레임에 park 박스가 여러 개(진짜+오검출) 잡히면 값이 큰박스↔작은박스로 튐 →
