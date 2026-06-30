@@ -475,8 +475,8 @@ class SelfDrivingNode(Node):
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 2
-                            and not self.start_turn  # TODO : 5->2, 게이트(1.0초)가 풀린 후 반응 시간을 줄여서 코너3처럼 좁은 시간 창에서도 트리거 가능하도록
+                            self.count_turn > 4
+                            and not self.start_turn  # TODO : 2->4, 2는 너무 예민해서(0.15초만에 트리거) 직선 구간에서도 너무 일찍 회전 시작함
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
@@ -546,8 +546,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 3.5
-                    ):  # TODO : 6->3.5초, 지금 회전속도(-0.64rad/s)로 6초면 약 220도 과회전 - 정상 회전이 보통 2.4~3.0초인데 6초까지 기다리면 코너를 훨씬 지나쳐서 복구 불가능해짐
+                        turn_elapsed > 3.2
+                    ):  # TODO : 3.5->3.2초 - 자연 종료 실패 시(박스4 영영 안 보임) 3.5초까지 끌면 과회전이 너무 심해서 복구 불가능 - 정상 회전(2.8~3.0초)은 여유있게 두고 실패 시 피해만 줄이기 위해 단축
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
