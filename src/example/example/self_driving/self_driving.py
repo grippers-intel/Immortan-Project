@@ -490,8 +490,6 @@ class SelfDrivingNode(Node):
                         else:
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
-                        self.count_turn = 0
-
                         if not self.start_turn:
                             self.pid.SetPoint = 225  # TODO 도로 중앙값 조절 (210->225, 아직 약간 우측 편향)
                             if (
@@ -596,8 +594,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        50 < box_height < 180 and 80 < box_width
-                    ):  # TODO 00 : 너비 상한 제거 (실측: 진짜 횡단보도가 가까워질수록 폭이 매우 넓어짐 - 높이로만 필터링)
+                        35 < box_height < 180 and 80 < box_width
+                    ):  # TODO 00 : 높이 하한 50->35 (더 멀리서/일찍 감지), 가짜 오인식은 높이 4~9라 35로도 충분히 걸러짐
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
