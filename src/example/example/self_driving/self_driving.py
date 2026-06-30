@@ -390,7 +390,7 @@ class SelfDrivingNode(Node):
                             self.mecanum_pub.publish(Twist())
                     else:
                         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
-                        if self.crosswalk_distance < 90:
+                        if self.crosswalk_distance < 70:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
                         if self.stop_reason == "crosswalk":
