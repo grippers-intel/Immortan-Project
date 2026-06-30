@@ -124,6 +124,8 @@ class SelfDrivingNode(Node):
         self.turn_right_angular = (
             -0.7
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
+        # 우회전 동작 파라미터
+        self.turn_right_forward_time = 1.0  # 우회전 전에 더 앞으로 가는 시간(초)
         self.turn_right_duration = (
             2.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
@@ -276,7 +278,7 @@ class SelfDrivingNode(Node):
         # HARD - 횡단보도 정차 후 직진
         twist.linear.x = self.normal_speed
         self.mecanum_pub.publish(twist)
-        time.sleep(1)
+        time.sleep(self.turn_right_forward_time)
 
         # HARD - 우회전
         twist.linear.x = self.turn_right_speed  # 전진하며
