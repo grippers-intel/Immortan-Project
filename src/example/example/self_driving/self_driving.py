@@ -522,10 +522,11 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = (
             False  # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         )
-        self.turn_right_speed = 0.05  # 우회전 시 전진 속도
+        self.turn_right_speed = 0.15  # 우회전 시 전진 속도
         self.turn_right_angular = (
-            -0.7
+            -0.5
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
+        self.turn_right_forward_time = 1.5
         self.turn_right_duration = (
             2.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
@@ -542,7 +543,7 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 200  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_dist = 350  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         # TODO : (150→200: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
@@ -559,7 +560,7 @@ class SelfDrivingNode(Node):
         #
         # lane_setpoint: 로봇이 차선 중앙일 때의 목표 lane_x 픽셀값(PID 목표점).
         #   값을 키우면 차가 더 오른쪽, 줄이면 더 왼쪽으로 붙어 주행함.
-        self.lane_setpoint = 140
+        self.lane_setpoint = 135
         # turn_threshold: 급회전 진입 임계값. lane_x가 이 값보다 크면 코너로 판단해 고정 회전.
         #   코너를 못 돌고 직진해 이탈하면 ↓, 직선에서 불필요하게 꺾이면 ↑.
         #   코너를 너무 빨리/일찍 도는 증상 → ↑ (진입 늦춤). lane_setpoint(130)보다 충분히 커야 함.
@@ -569,7 +570,7 @@ class SelfDrivingNode(Node):
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
-        self.turn_angular_z = -0.8
+        self.turn_angular_z = -0.5
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.1
@@ -670,21 +671,21 @@ class SelfDrivingNode(Node):
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행).
     # TODO : park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
+        # 1단계: 회전 없이 똑바로 직진 — 교차로 안쪽까지 더 들어간 뒤 돌게 함(일찍 꺾임 방지)
         twist = Twist()
-
-        # HARD - 횡단보도 정차 후 직진
-        twist.linear.x = self.normal_speed
+        twist.linear.x = self.turn_right_speed
+        twist.angular.z = 0.0
         self.mecanum_pub.publish(twist)
-        time.sleep(1)
-
-        # HARD - 우회전
-        twist.linear.x = self.turn_right_speed  # 전진하며
-        twist.angular.z = self.turn_right_angular  # 우회전
+        time.sleep(self.turn_right_forward_time)
+        # 2단계: 전진하며 우회전
+        twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
-        self.mecanum_pub.publish(Twist())  # 정지
-        # self.doing_turn_right = False  # 차선추종 재개
-        self.have_turn_right = True
+        time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝
+        self.mecanum_pub.publish(Twist())  
+        #TODO:
+                # 정지
+        self.pid.clear()
+        self.doing_turn_right = False              # 차선추종 재개
 
     def main(self):
         while self.is_running:
@@ -732,67 +733,92 @@ class SelfDrivingNode(Node):
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
                 # TODO : 우회전 표지 감지 시 Parking까지 수행 후 shutdown
-
-                if self.turn_right and not self.doing_turn_right:
-                    self.mecanum_pub.publish(Twist())
-                    time.sleep(1)
-                    self.turn_right = False
-                    self.doing_turn_right = True
-                    self.turn_right_action()
-                    twist.linear.x = self.normal_speed
-                    self.mecanum_pub.publish(twist)
-                    # time.sleep(6)
-
-                else:
-                    if (
-                        not self.start_park
-                        and not self.doing_turn_right
-                        and self.crosswalk_distance > self.crosswalk_stop_dist
-                        and not self.crosswalk_passed
-                    ):
-                        # 횡단보도가 충분히 가까움 → 정지 단계
-                        if not self.crosswalk_stopping:
-                            self.crosswalk_stopping = True
-                            self.crosswalk_stop_time = (
-                                time.time()
-                            )  # 정지 시작 시각 기록
-                        # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
-                        is_red = (
-                            self.traffic_signs_status is not None
-                            and self.traffic_signs_status.class_name == "red"
-                        )
-                        stopped_enough = (
-                            time.time() - self.crosswalk_stop_time
-                        ) > self.crosswalk_stop_duration
-                        if stopped_enough and not is_red:
-                            self.crosswalk_passed = (
-                                True  # 통과 허용 → 이후 차선추종으로 진행
-                            )
-                            self.crosswalk_stopping = False
-                            self.stop = False
-                            self.stop_reason = None
-                        else:
-                            self.stop = True  # 정지 유지
-                            self.stop_reason = "crosswalk"
-                            self.mecanum_pub.publish(Twist())
+                if self.crosswalk_distance > self.crosswalk_stop_dist and not self.crosswalk_passed:
+                    # 횡단보도가 충분히 가까움 → 정지 단계
+                    if not self.crosswalk_stopping:
+                        self.crosswalk_stopping = True
+                        self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                    # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
+                    is_red = (self.traffic_signs_status is not None and self.traffic_signs_status.class_name == 'red')
+                    stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
+                    if stopped_enough and not is_red:
+                        self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
+                        self.crosswalk_stopping = False
+                        self.stop = False
+                        # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
+                        if self.turn_right and not self.doing_turn_right:
+                            self.turn_right = False
+                            self.doing_turn_right = True
+                            threading.Thread(target=self.turn_right_action, daemon=True).start()
                     else:
-                        # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
-                        if self.crosswalk_distance < 70:
-                            self.crosswalk_passed = False
-                            self.crosswalk_stopping = False
-                        if self.stop_reason == "crosswalk":
-                            self.stop = False
-                            self.stop_reason = None
+                        self.stop = True               # 정지 유지
+                        self.mecanum_pub.publish(Twist())
+                else:
+                    # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
+                    if self.crosswalk_distance < 70:
+                        self.crosswalk_passed = False
+                        self.crosswalk_stopping = False
+                    self.stop = False
+                # if self.turn_right and not self.doing_turn_right:
+                #     self.mecanum_pub.publish(Twist())
+                #     time.sleep(1)
+                #     self.turn_right = False
+                #     self.doing_turn_right = True
+                #     self.turn_right_action()
+                #     twist.linear.x = self.normal_speed
+                #     self.mecanum_pub.publish(twist)
+                #     # time.sleep(6)
+
+                # else:
+                #     if (
+                #         not self.start_park
+                #         and not self.doing_turn_right
+                #         and self.crosswalk_distance > self.crosswalk_stop_dist
+                #         and not self.crosswalk_passed
+                #     ):
+                #         # 횡단보도가 충분히 가까움 → 정지 단계
+                #         if not self.crosswalk_stopping:
+                #             self.crosswalk_stopping = True
+                #             self.crosswalk_stop_time = (
+                #                 time.time()
+                #             )  # 정지 시작 시각 기록
+                #         # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
+                #         is_red = (
+                #             self.traffic_signs_status is not None
+                #             and self.traffic_signs_status.class_name == "red"
+                #         )
+                #         stopped_enough = (
+                #             time.time() - self.crosswalk_stop_time
+                #         ) > self.crosswalk_stop_duration
+                #         if stopped_enough and not is_red:
+                #             self.crosswalk_passed = (
+                #                 True  # 통과 허용 → 이후 차선추종으로 진행
+                #             )
+                #             self.crosswalk_stopping = False
+                #             self.stop = False
+                #             self.stop_reason = None
+                #         else:
+                #             self.stop = True  # 정지 유지
+                #             self.stop_reason = "crosswalk"
+                #             self.mecanum_pub.publish(Twist())
+                #     else:
+                #         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
+                #         if self.crosswalk_distance < 70:
+                #             self.crosswalk_passed = False
+                #             self.crosswalk_stopping = False
+                #         if self.stop_reason == "crosswalk":
+                #             self.stop = False
+                #             self.stop_reason = None
                 
-                self.get_logger().info(
-                            "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
-                            % (
-                                self.stop_reason,
-                                self.park_x,
-                                self.park_area,
-                                self.count_park,
-                            )
-                        )
+                # self.get_logger().info(
+                #             "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
+                #             % (
+                #                 self.stop_reason,
+                #                 self.park_x,
+                #                 self.park_area,
+                #                 self.count_park,
+                #             )
+                #         )
 
 
                 # [주차 전 정지 원인 확인]
