@@ -108,8 +108,11 @@ class SelfDrivingNode(Node):
     def param_init(self):
         self.start = False
         self.enter = False
+        self.right = True
 
         self.have_turn_right = False
+        self.detect_turn_right = False
+        self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
 
         self.start_turn_time_stamp = 0
@@ -139,6 +142,7 @@ class SelfDrivingNode(Node):
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
+        self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
@@ -186,6 +190,7 @@ class SelfDrivingNode(Node):
         self.turn_recover_time = 2.0
 
         self.traffic_signs_status = None  # record the state of the traffic lights
+        self.red_loss_count = 0
 
         self.object_sub = None
         self.image_sub = None
@@ -330,12 +335,10 @@ class SelfDrivingNode(Node):
                     time.sleep(6)
                     self.park_action()
                     self.shutdown()
-
                 else:
+
                     if (
-                        not self.start_park
-                        and not self.doing_turn_right
-                        and self.crosswalk_distance > self.crosswalk_stop_dist
+                        self.crosswalk_distance > self.crosswalk_stop_dist
                         and not self.crosswalk_passed
                     ):
                         # 횡단보도가 충분히 가까움 → 정지 단계
@@ -366,6 +369,22 @@ class SelfDrivingNode(Node):
                         if self.crosswalk_distance < 70:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
+                        self.stop = False
+
+                # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
+                # if 0 < self.park_x and 135 < self.crosswalk_distance:
+                #     twist.linear.x = self.slow_down_speed
+                #     if (
+                #         not self.start_park and 180 < self.crosswalk_distance
+                #     ):  # When the robot is close enough to the crosswalk, it will start parking
+                #         self.count_park += 1
+                #         if self.count_park >= 15:
+                #             self.mecanum_pub.publish(Twist())
+                #             self.start_park = True
+                #             self.stop = True
+                #             threading.Thread(target=self.park_action).start()
+                #     else:
+                #         self.count_park = 0
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
