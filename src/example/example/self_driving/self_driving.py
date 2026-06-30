@@ -466,6 +466,8 @@ class SelfDrivingNode(Node):
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5
+                        and center_x[0]
+                        != -1  # TODO : 박스1(제일 먼 곳)은 살아있어야 함 - 차선 완전히 놓친 것과 진짜 코너를 구분 (전부 -1인데 회전 오발동하던 버그 수정)
                         and center_x[3] == -1
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_raw_last_seen_time
@@ -602,8 +604,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        15 < box_height < 180 and 80 < box_width
-                    ):  # TODO : 높이 하한 35->15 (정지 트리거가 항상 거리 330~439에서 발동되어 멈춤 위치 들쭉날쭉 + 라인 밟는 경우 발생 - 더 멀리서부터 추적 시작해서 여유 공간 확보, 가짜 오인식 노이즈는 높이 4~9라 15도 안전)
+                        25 < box_height < 180 and 80 < box_width
+                    ):  # TODO : 15->25 (너무 일찍 멈추는 문제 발생 - 라인 밟음 방지와 너무 멀리 정지의 중간값으로 조정)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
