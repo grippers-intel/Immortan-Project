@@ -157,6 +157,9 @@ class SelfDrivingNode(Node):
         self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_last_seen_time = 0  # TODO : 깜빡임 방지용 마지막 감지 시간
+        self.crosswalk_raw_last_seen_time = (
+            0  # TODO : 필터 통과 여부 상관없이 YOLO가 crosswalk를 본 마지막 시간 → 추가
+        )
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
         self.start_slow_down = False  # slowing down sign
@@ -465,8 +468,8 @@ class SelfDrivingNode(Node):
                         len(center_x) >= 5
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and self.crosswalk_distance
-                        < 100  # TODO : 횡단보도가 시야에 있으면(거리값 큼) 회전 감지 보류 - 흰줄무늬가 박스4,5 오작동 유발
+                        and time.time() - self.crosswalk_raw_last_seen_time
+                        > 1.0  # TODO : crosswalk_distance 대신 raw 감지 시간 사용 - 차선인식 자체가 줄무늬에 혼동되는 문제라 YOLO가 crosswalk를 본 시점 기준으로 막아야 함
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
@@ -594,6 +597,9 @@ class SelfDrivingNode(Node):
                 if class_name == "crosswalk":
                     box_height = abs(i.box[1] - i.box[3])  # TODO 00 : 박스 높이 계산
                     box_width = abs(i.box[0] - i.box[2])  # TODO : 박스 너비 계산 → 추가
+                    self.crosswalk_raw_last_seen_time = (
+                        time.time()
+                    )  # TODO : 필터 통과 여부 상관없이 본 시간 기록 → 추가
                     self.get_logger().info(
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
