@@ -138,13 +138,15 @@ class SelfDrivingNode(Node):
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
         self.crosswalk_stop_dist = 350      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
                                             #   (150→350: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
+        self.crosswalk_min_area = 3000      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분을
+                                            #   한프레임씩 횡단보도로 오검출하던 것 제거. 진짜 횡단보도 미인식이면 ↓
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0        # 정지 시작 시각
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.1  # normal driving speed
+        self.normal_speed = 0.15  # normal driving speed (완주시간 가산점 위해 0.1→0.15 상향. 코너링 불안정하면 ↓)
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -499,8 +501,12 @@ class SelfDrivingNode(Node):
                 class_name = i.class_name
                 center = (int((i.box[0] + i.box[2])/2), int((i.box[1] + i.box[3])/2))
                 
-                if class_name == 'crosswalk':  
-                    if center[1] > min_distance:  # Obtain recent y-axis pixel coordinate of the crosswalk
+                if class_name == 'crosswalk':
+                    # [수정] 바닥 허연 자국을 횡단보도로 오검출(한프레임씩)하는 것 방지.
+                    #   박스 면적이 crosswalk_min_area 이상인 '충분히 큰' 검출만 인정.
+                    cw_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                    self.get_logger().info('\033[1;36mcrosswalk area=%d (min=%d)\033[0m' % (cw_area, self.crosswalk_min_area))
+                    if cw_area >= self.crosswalk_min_area and center[1] > min_distance:  # Obtain recent y-axis pixel coordinate of the crosswalk
                         min_distance = center[1]
                 elif class_name == 'right':  # obtain the right turning sign
                     self.count_right += 1
