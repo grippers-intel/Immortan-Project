@@ -1,5 +1,9 @@
 # Immortan-Project
 
+[코드 구조](https://app.notion.com/p/keymix/MentorPi-M1-389668e00f258185b6b6c2cffab83541)
+
+[로직 상세 설명](https://app.notion.com/p/keymix/38f668e00f2581228bb1dc0e208e1f90)
+
 수정해야 되는 점
 1. 우회전 인식 못함
 2. park 인식 못함
