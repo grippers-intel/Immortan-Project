@@ -281,6 +281,8 @@ class SelfDrivingNode(Node):
                     )
                 )
 
+                twist.linear.x = self.normal_speed  # 기본 직진 속도
+
                 # 우회전 동작 처리 (규칙: 우회전 표지판 인식 후 횡단보도 정지 → 우회전 수행)
 
                 if self.turn_right and not self.doing_turn_right:
@@ -318,10 +320,6 @@ class SelfDrivingNode(Node):
                             )
                             self.crosswalk_stopping = False
                             self.stop = False
-                            twist.linear.x = self.normal_speed  # 기본 직진 속도
-                            self.mecanum_pub.publish(
-                                twist
-                            )  # TODO - Red 꺼지면 0.1초 진행
                             time.sleep(0.1)
                         else:
                             self.stop = True  # 정지 유지
@@ -455,8 +453,8 @@ class SelfDrivingNode(Node):
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
             # TODO - 객체 미탐지 시 초기화
-            self.park_area = 0
-            self.park_x = -1
+            # self.park_area = 0
+            # self.park_x = -1
         else:
             min_distance = 0
             for i in self.objects_info:
