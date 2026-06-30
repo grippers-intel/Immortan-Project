@@ -131,6 +131,7 @@ class SelfDrivingNode(Node):
         self.count_park = 0  
         self.stop = False  # stopping sign
         self.start_park = False  # start parking sign
+        self.parked = False  # 주차 완료(이후 영구 정지). 주차가 마지막 미션이므로 끝나면 안 움직임
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
@@ -148,7 +149,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.15  # normal driving speed (완주시간 가산점 위해 0.1→0.15 상향. 코너링 불안정하면 ↓)
+        self.normal_speed = 0.3  # normal driving speed (0.15→0.3 두 배. 코너링 언더스티어/주차접근 오버슈트 주의)
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -301,6 +302,7 @@ class SelfDrivingNode(Node):
             self.mecanum_pub.publish(twist)
             time.sleep(1.5)
         self.mecanum_pub.publish(Twist())
+        self.parked = True  # 주차 완료 → main 루프가 이후 계속 정지 유지
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
@@ -330,7 +332,10 @@ class SelfDrivingNode(Node):
                     continue
 
             result_image = image.copy()
-            if self.start:
+            if self.start and self.parked:
+                # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
+                self.mecanum_pub.publish(Twist())
+            elif self.start:
                 h, w = image.shape[:2]
 
                 # obtain the binary image of the lane
