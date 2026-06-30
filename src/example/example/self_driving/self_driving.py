@@ -303,7 +303,9 @@ class SelfDrivingNode(Node):
                         # 횡단보도가 충분히 가까움 → 정지 단계
                         if not self.crosswalk_stopping:
                             self.crosswalk_stopping = True
-                            self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                            self.crosswalk_stop_time = (
+                                time.time()
+                            )  # 정지 시작 시각 기록
                         # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
                         is_red = (
                             self.traffic_signs_status is not None
@@ -405,7 +407,7 @@ class SelfDrivingNode(Node):
                                 self.stop = True
                                 self.park_action()
                     else:
-                        if self.park_miss > 5:    
+                        if self.park_miss > 5:
                             self.count_park = 0
                     self.mecanum_pub.publish(twist)
 
@@ -508,4 +510,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()';;'
+    main()
