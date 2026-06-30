@@ -223,11 +223,11 @@ class SelfDrivingNode(Node):
         self.image_sub = None
         self.objects_info = []
 
-        # led.all_off()
+        led.all_off()
 
     def shutdown(self):  # press 'ctrl+c' to close the program
         self.is_running = False
-        # led.cleanup()
+        led.cleanup()
 
     # parking processing
     def park_action(self):
@@ -238,7 +238,7 @@ class SelfDrivingNode(Node):
             self.mecanum_pub.publish(twist)
             time.sleep(1)
         self.mecanum_pub.publish(Twist())
-        # led.mode_park_done()
+        led.mode_park_done()
         self.shutdown()
 
     # 우회전 동작
@@ -247,7 +247,7 @@ class SelfDrivingNode(Node):
         twist.linear.x = self.turn_right_speed  # 전진하며
         twist.angular.z = self.turn_right_angular  # 우회전
         self.mecanum_pub.publish(twist)
-        # led.mode_turn_right()
+        led.mode_turn_right()
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())  # 정지
         self.doing_turn_right = False  # 차선추종 재개
@@ -318,7 +318,7 @@ class SelfDrivingNode(Node):
                     else:
                         self.stop = True  # 정지 유지
                         self.mecanum_pub.publish(Twist())
-                        # led.mode_stop()
+                        led.mode_stop()
                 else:
                     # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
                     if self.crosswalk_distance < 70:
@@ -351,7 +351,7 @@ class SelfDrivingNode(Node):
                             twist.angular.z = (
                                 self.turn_angular_z
                             )  # [튜닝] 고정 회전 각속도 (param_init의 turn_angular_z)
-                            # led.mode_turn_right()
+                            led.mode_turn_right()
                     else:  # use PID algorithm to correct turns on a straight road
                         self.count_turn = 0
                         if (
@@ -369,7 +369,7 @@ class SelfDrivingNode(Node):
                             if abs(lane_x - self.lane_setpoint) < self.lane_deadband:
                                 self.pid.clear()  # PID 내부 상태 초기화로 데드밴드 이탈 시 튐 방지
                                 twist.angular.z = 0.0
-                                # led.mode_straight()
+                                led.mode_straight()
                             else:
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
@@ -379,10 +379,10 @@ class SelfDrivingNode(Node):
                                         self.angular_z_limit,
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
                                 # led : PID 조향 중: angular.z 크기로 직진/조향 구분
-                                # if abs(twist.angular.z) < 0.05:
-                                #     led.mode_straight()    # ← 거의 직진
-                                # else:
-                                #     led.mode_turn_right()  # ← PID 조향
+                                if abs(twist.angular.z) < 0.05:
+                                    led.mode_straight()  # ← 거의 직진
+                                else:
+                                    led.mode_turn_right()  # ← PID 조향
 
                     # TODO : 주차 process 위치 변경 (lane detect 후 publish 전에 변경)
                     if 0 < self.park_x and self.park_area > 1000:
