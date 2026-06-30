@@ -571,6 +571,7 @@ class SelfDrivingNode(Node):
                         self.count_right >= 10
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
+                        self.count_right = 0 
                         # self.count_right = 0
                 elif (
                     class_name == "park"
