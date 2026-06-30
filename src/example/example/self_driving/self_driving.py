@@ -470,9 +470,7 @@ class SelfDrivingNode(Node):
                         != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and time.time() - self.crosswalk_raw_last_seen_time
-                        > 1.0  # TODO : 0.5->1.0초 원복 - 0.5초는 다른 횡단보도 근처에서 너무 빨리 풀려서 엉뚱한 곳에서 회전 오발동시킴
-                    ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
+                    ):  # TODO : 횡단보도 게이트(crosswalk_raw_last_seen_time) 제거 - 일부 코너는 횡단보도가 바로 근처에 있어 계속 인식되는 바람에 게이트가 영영 안 풀려서 회전 자체가 막혔음. 박스1 생존 조건으로 차선 소실 오발동은 이미 방지되므로 게이트 불필요
                         self.count_turn += 1
                         if (
                             self.count_turn > 4
