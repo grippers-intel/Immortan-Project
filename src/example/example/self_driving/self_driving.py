@@ -105,7 +105,8 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        self.park_min_area = 1500  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+        self.park_min_area = 1000  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+                                   #   (1500→1000: 실측 park_area가 320~1036이라 1500은 절대 안 걸림. 로그 보고 정밀 조정)
         self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
@@ -382,7 +383,7 @@ class SelfDrivingNode(Node):
                     twist.linear.x = self.slow_down_speed
                     if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
                         self.count_park += 1
-                        if self.count_park >= 15:  # 연속 15프레임 가까우면 주차 동작 시작
+                        if self.count_park >= 8:  # 연속 8프레임 가까우면 주차 시작 (15→8: 검출이 드문드문이라 완화)
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
@@ -399,9 +400,10 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if self.going_to_park and not self.stop:
-                    # [추가] 우회전 후 주차장까지는 '우측 라인'을 PID로 추종.
+                if (self.going_to_park or self.park_x > 0) and not self.stop:
+                    # [추가] 우회전 후(going_to_park) 또는 주차 표지판이 보일 때(park_x>0)는 '우측 라인'을 PID로 추종.
                     #   좌측엔 중앙 교차로 갈림길이 있어 기존(좌측) 차선추종은 좌측 길로 이탈했음.
+                    #   park_x>0 조건 덕분에 어떻게 도달했든(실주행/수동) 주차 표지판만 보이면 접근 모드로 들어감.
                     #   우측 절반 ROI 검출기로 우측 라인 x(right_x)를 구해 park_lane_setpoint에 맞춤.
                     #   우측 라인이 안 보이면(-1) 직진 폴백. 주차 표지판이 가까워지면 위 주차 블록에서 종료.
                     _, _, _, right_x = self.lane_detect_right(binary_image, result_image)
