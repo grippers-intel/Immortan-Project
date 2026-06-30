@@ -122,11 +122,9 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # 현재 프레임에서 인식된 park 박스 면적(px^2)
-        self.park_area_threshold = (
-            1000  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
-        )
+        self.park_area_threshold = 900  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단. 값↓=parking 시작 빨라짐
         # TODO: hease 우회전 이후 주차장 접근 상태와 jay parking 진입 보정값 병합.
-        self.park_forward_time = 1.0
+        self.park_forward_time = 0.7
         self.going_to_park = False
         self.park_lane_setpoint = 190
 
@@ -142,7 +140,7 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = (
             False  # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         )
-        self.turn_right_speed = 0.05  # 우회전 시 전진 속도
+        self.turn_right_speed = 0.15  # 우회전 시 전진 속도
         self.turn_right_angular = (
             -0.5
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
@@ -170,7 +168,7 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 220  # crosswalk_distance가 이 값보다 크면 정지. 값↓=더 일찍, 값↑=더 늦게 멈춤.
+        self.crosswalk_stop_dist = 180  # crosswalk_distance가 이 값보다 크면 정지. 값↓=더 일찍, 값↑=더 늦게 멈춤.
         # TODO: 첫 번째 횡단보도를 지나친 뒤 멈추는 문제 개선을 위해 center y 대신 box bottom y를 사용.
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
@@ -302,6 +300,14 @@ class SelfDrivingNode(Node):
         self.shutdown()
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행).
+    def start_turn_right_action(self):
+        if self.turn_right and not self.doing_turn_right and not self.have_turn_right:
+            # TODO: 우회전 표지 포착 후 횡단보도 정지 완료 타이밍을 놓쳐도 한 번만 실행되게 분리.
+            self.turn_right = False
+            self.doing_turn_right = True
+            self.mecanum_pub.publish(Twist())
+            threading.Thread(target=self.turn_right_action, daemon=True).start()
+
     def turn_right_action(self):
         twist = Twist()
         twist.linear.x = self.turn_right_speed
@@ -387,13 +393,8 @@ class SelfDrivingNode(Node):
                         self.crosswalk_stopping = False
                         self.stop = False
                         self.stop_reason = None
-                        if self.turn_right and not self.doing_turn_right:
-                            # TODO: hease 방식처럼 횡단보도 정지 완료 후 우회전만 별도 스레드로 실행.
-                            self.turn_right = False
-                            self.doing_turn_right = True
-                            threading.Thread(
-                                target=self.turn_right_action, daemon=True
-                            ).start()
+                        # TODO: hease 방식처럼 횡단보도 정지 완료 후 우회전만 별도 스레드로 실행.
+                        self.start_turn_right_action()
                     else:
                         self.stop = True  # 정지 유지
                         self.stop_reason = "crosswalk"
@@ -406,6 +407,9 @@ class SelfDrivingNode(Node):
                     if self.stop_reason == "crosswalk":
                         self.stop = False
                         self.stop_reason = None
+                    if self.turn_right and self.crosswalk_passed:
+                        # TODO: 우회전 표지를 늦게 포착해도 통과 처리된 횡단보도 뒤에서 우회전을 실행.
+                        self.start_turn_right_action()
 
                 self.get_logger().info(
                     "parking trigger: reason=%s park_x=%s park_area=%s count_park=%s"
@@ -423,7 +427,7 @@ class SelfDrivingNode(Node):
                         self.count_park += 1
                     # else:
                     #     self.count_park = 0
-                    if self.count_park >= 10:
+                    if self.count_park >= 7:
                         self.start_park = True
                         self.stop = True
                         self.stop_reason = "park"
@@ -599,7 +603,7 @@ class SelfDrivingNode(Node):
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 8
+                        self.count_right >= 5
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0
