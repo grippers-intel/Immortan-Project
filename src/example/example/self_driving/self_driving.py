@@ -520,8 +520,8 @@ class SelfDrivingNode(Node):
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 0.7
-                            ):  # TODO : 횡단보도 정지 직후 줄무늬가 시야를 가려 차선이 안 보이는 문제 방지 - 0.7초간 조향 없이 강제 전진 → 추가 (이전엔 angular.z만 0으로 하고 속도는 안 줘서 제자리에 멈춰있던 버그 수정)
-                                twist.angular.z = 0.0
+                                and not (lane_x is not None and lane_x > 0)
+                            ):  # TODO : 0.7초간 "조향 금지"는 제거 - 비스듬하게 멈췄을 때 보정을 못 해서 오히려 박스4,5를 계속 못 찾는 원인이었을 가능성. 차선이 안 보일 때만 강제 전진(PID는 차선 보이면 바로 작동) → 수정
                                 twist.linear.x = self.drive_params["straight"][
                                     "linear_x"
                                 ]  # TODO : 차선 안 보여도 강제로 전진해서 횡단보도 줄무늬 구간을 지나가도록
