@@ -568,7 +568,7 @@ class SelfDrivingNode(Node):
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 5
+                        self.count_right >= 8
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0 
