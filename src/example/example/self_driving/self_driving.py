@@ -471,11 +471,12 @@ class SelfDrivingNode(Node):
                         and center_x[3] == -1
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_raw_last_seen_time
-                        > 0.5  # TODO : 1.0->0.5초 - 게이트가 너무 길어서 코너 진입 신호가 쌓일 시간(5프레임)이 부족했음, 횡단보도 잔여 인식이 코너 직전까지 이어지는 구간에서 특히 문제
+                        > 1.0  # TODO : 0.5->1.0초 원복 - 0.5초는 다른 횡단보도 근처에서 너무 빨리 풀려서 엉뚱한 곳에서 회전 오발동시킴
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 5 and not self.start_turn
+                            self.count_turn > 2
+                            and not self.start_turn  # TODO : 5->2, 게이트(1.0초)가 풀린 후 반응 시간을 줄여서 코너3처럼 좁은 시간 창에서도 트리거 가능하도록
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
