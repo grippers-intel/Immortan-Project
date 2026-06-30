@@ -341,10 +341,10 @@ class SelfDrivingNode(Node):
                     if time.time() - self.crosswalk_ignore_time > 3.5:
                         self.crosswalk_ignore = False
                 if (
-                    100 < self.crosswalk_distance
+                    60 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
-                ):  # TODO 00 : ignore 조건 추가, 거리기준 150->100 (더 멀리서 감지)
+                ):  # TODO 00 : ignore 조건 추가, 거리기준 100->60 (더 일찍 정지)
                     self.count_crosswalk += 1
                     if (
                         self.count_crosswalk == 2
@@ -489,7 +489,7 @@ class SelfDrivingNode(Node):
                         self.count_turn = 0
 
                         if not self.start_turn:
-                            self.pid.SetPoint = 210  # TODO 도로 중앙값 조절 (185->210, 우측 편향 보정 - 카메라 각도 변경 반영)
+                            self.pid.SetPoint = 225  # TODO 도로 중앙값 조절 (210->225, 아직 약간 우측 편향)
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
@@ -573,16 +573,20 @@ class SelfDrivingNode(Node):
 
                 if class_name == "crosswalk":
                     box_height = abs(i.box[1] - i.box[3])  # TODO 00 : 박스 높이 계산
+                    box_width = abs(i.box[0] - i.box[2])  # TODO : 박스 너비 계산 → 추가
+                    self.get_logger().info(
+                        f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
+                    )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        box_height > 50
-                    ):  # TODO 00 : 오인식 방지 기준값 30->50 (작은 오인식 필터링)
+                        50 < box_height < 180 and 80 < box_width < 400
+                    ):  # TODO 00 : 오인식 방지 기준값 (너무 작거나 너무 커도 제외)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                             min_distance = center[1]
                             self.get_logger().info(
-                                f"crosswalk box_height: {box_height}"
-                            )  # TODO 00 : 높이 로그 → 추가
+                                f"crosswalk box_height: {box_height}, box_width: {box_width}"
+                            )  # TODO 00 : 높이/너비 로그 → 추가
                 elif class_name == "right":  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
