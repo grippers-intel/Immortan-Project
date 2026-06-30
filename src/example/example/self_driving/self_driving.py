@@ -335,10 +335,12 @@ class SelfDrivingNode(Node):
                     time.sleep(6)
                     self.park_action()
                     self.shutdown()
-                else:
 
+                else:
                     if (
-                        self.crosswalk_distance > self.crosswalk_stop_dist
+                        not self.start_park
+                        and not self.doing_turn_right
+                        and self.crosswalk_distance > self.crosswalk_stop_dist
                         and not self.crosswalk_passed
                     ):
                         # 횡단보도가 충분히 가까움 → 정지 단계
@@ -361,30 +363,19 @@ class SelfDrivingNode(Node):
                             )
                             self.crosswalk_stopping = False
                             self.stop = False
+                            self.stop_reason = None
                         else:
                             self.stop = True  # 정지 유지
+                            self.stop_reason = "crosswalk"
                             self.mecanum_pub.publish(Twist())
                     else:
                         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
                         if self.crosswalk_distance < 70:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
-                        self.stop = False
-
-                # # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
-                # if 0 < self.park_x and 135 < self.crosswalk_distance:
-                #     twist.linear.x = self.slow_down_speed
-                #     if (
-                #         not self.start_park and 180 < self.crosswalk_distance
-                #     ):  # When the robot is close enough to the crosswalk, it will start parking
-                #         self.count_park += 1
-                #         if self.count_park >= 15:
-                #             self.mecanum_pub.publish(Twist())
-                #             self.start_park = True
-                #             self.stop = True
-                #             threading.Thread(target=self.park_action).start()
-                #     else:
-                #         self.count_park = 0
+                        if self.stop_reason == "crosswalk":
+                            self.stop = False
+                            self.stop_reason = None
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
