@@ -26,7 +26,13 @@ from sdk.common import colors, plot_one_box
 from example.self_driving import lane_detect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState
+from ros_robot_controller_msgs.msg import (
+    BuzzerState,
+    SetPWMServoState,
+    PWMServoState,
+    RGBStates,
+    RGBState,
+)
 
 
 class SelfDrivingNode(Node):
@@ -72,6 +78,10 @@ class SelfDrivingNode(Node):
         self.mecanum_pub = self.create_publisher(Twist, "/controller/cmd_vel", 1)
         self.servo_state_pub = self.create_publisher(
             SetPWMServoState, "ros_robot_controller/pwm_servo/set_state", 1
+        )
+        # [LED] 온보드 RGB LED 2개(RGB1=index1, RGB2=index2) 제어용 발행자.
+        self.rgb_pub = self.create_publisher(
+            RGBStates, "/ros_robot_controller/set_rgb", 1
         )
         self.result_publisher = self.create_publisher(Image, "~/image_result", 1)
 
@@ -142,6 +152,15 @@ class SelfDrivingNode(Node):
         self.count_right = 0
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
+        self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
+
+        # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
+        self.count_go = 0
+        self.go_signal_time = 0  # 직진 표지판 마지막 인식 시각
+        self.go_signal_duration = 3.0  # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
+        self.last_led_state = (
+            None  # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
+        )
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = (
@@ -360,6 +379,49 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False  # 차선추종 재개
         self.going_to_park = True  # 이후 주차장까지는 직진만(좌측 라인 이탈 방지)
 
+    # [LED] 두 RGB LED 색 발행. 색이 바뀔 때만 발행(점멸/상태변화 시에만).
+    def publish_leds(self, c1, c2):
+        state = (c1, c2)
+        if state == self.last_led_state:
+            return
+        self.last_led_state = state
+        msg = RGBStates()
+        msg.states = [
+            RGBState(index=1, red=int(c1[0]), green=int(c1[1]), blue=int(c1[2])),
+            RGBState(index=2, red=int(c2[0]), green=int(c2[1]), blue=int(c2[2])),
+        ]
+        self.rgb_pub.publish(msg)
+
+    # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
+    #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
+    def update_leds(self):
+        GREEN = (0, 255, 0)
+        RED = (255, 0, 0)
+        YELLOW = (255, 255, 0)
+        OFF = (0, 0, 0)
+        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
+        if self.parked:
+            # 주차 완료 → 모든 LED 점멸
+            c = YELLOW if blink else OFF
+            led1 = led2 = c
+        elif self.stop:
+            # 정지 → 빨강
+            led1 = led2 = RED
+        elif self.doing_turn_right or self.turn_right:
+            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
+            led1 = OFF
+            led2 = YELLOW if blink else OFF
+        elif (
+            self.go_signal_time
+            and (time.time() - self.go_signal_time) < self.go_signal_duration
+        ):
+            # 직진 표지판 인식 → 양쪽 노란 점멸
+            led1 = led2 = YELLOW if blink else OFF
+        else:
+            # 주행 → 녹색
+            led1 = led2 = GREEN
+        self.publish_leds(led1, led2)
+
     def main(self):
         while self.is_running:
             time_start = time.time()
@@ -372,6 +434,8 @@ class SelfDrivingNode(Node):
                     continue
 
             result_image = image.copy()
+            if self.start:
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
@@ -386,7 +450,7 @@ class SelfDrivingNode(Node):
                 # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
                 # [디버그 로그] crosswalk=거리, stopping=정지중, passed=통과처리됨, sign=신호등상태
                 self.get_logger().info(
-                    "\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s\033[0m"
+                    "\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s turn_right=%s doing=%s\033[0m"
                     % (
                         self.crosswalk_distance,
                         self.crosswalk_stopping,
@@ -396,6 +460,8 @@ class SelfDrivingNode(Node):
                             if self.traffic_signs_status is not None
                             else "none"
                         ),
+                        self.turn_right,
+                        self.doing_turn_right,
                     )
                 )
 
@@ -427,10 +493,9 @@ class SelfDrivingNode(Node):
                         if self.turn_right and not self.doing_turn_right:
                             self.turn_right = False
                             self.doing_turn_right = True
-                            # threading.Thread(
-                            #     target=self.turn_right_action, daemon=True
-                            # ).start()
-                            self.turn_right_action()
+                            threading.Thread(
+                                target=self.turn_right_action, daemon=True
+                            ).start()
                     elif (
                         not self.start_park
                     ):  # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
@@ -648,14 +713,26 @@ class SelfDrivingNode(Node):
                         cw_area >= self.crosswalk_min_area and center[1] > min_distance
                     ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                         min_distance = center[1]
+                elif (
+                    class_name == "go"
+                ):  # [LED] 직진 화살표 표지판 → 노란 LED 점멸 트리거
+                    self.count_go += 1
+                    if self.count_go >= 3:
+                        self.go_signal_time = time.time()
+                        self.count_go = 0
                 elif class_name == "right":  # obtain the right turning sign
-                    self.count_right += 1
-                    self.count_right_miss = 0
-                    if (
-                        self.count_right >= 5
-                    ):  # If it is detected multiple times, take the right turning sign to true
-                        self.turn_right = True
-                        self.count_right = 0
+                    # [수정] 표지판이 '충분히 가까울 때'(박스 큼)만 카운트 → 멀리서 일찍 turn_right가 켜져
+                    #   엉뚱한 앞 코너에서 깜빡이가 켜지거나 일반 코너링이 우회전을 가로채던 문제 방지.
+                    right_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                    self.get_logger().info(
+                        "\033[1;31mright sign area=%d (min=%d) count=%d\033[0m"
+                        % (right_area, self.right_min_area, self.count_right)
+                    )
+                    if right_area >= self.right_min_area:
+                        self.count_right += 1
+                        if self.count_right >= 3:
+                            self.turn_right = True
+                            self.count_right = 0
                 elif (
                     class_name == "park"
                 ):  # obtain the center coordinate of the parking sign
