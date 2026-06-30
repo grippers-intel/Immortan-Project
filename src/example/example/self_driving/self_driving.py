@@ -465,11 +465,8 @@ class SelfDrivingNode(Node):
                         len(center_x) >= 5
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and (
-                            not self.crosswalk_ignore
-                            or time.time() - self.crosswalk_ignore_time
-                            > 1.5  # TODO : 3.5초->1.5초, 너무 길어서 진짜 코너까지 막던 문제 수정
-                        )
+                        and self.crosswalk_distance
+                        < 100  # TODO : 횡단보도가 시야에 있으면(거리값 큼) 회전 감지 보류 - 흰줄무늬가 박스4,5 오작동 유발
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
@@ -638,6 +635,10 @@ class SelfDrivingNode(Node):
 
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             if (
+                self.crosswalk_ignore
+            ):  # TODO : 정지 직후 보호기간 동안은 횡단보도 거리값 추적 자체를 무시 (두번째 횡단보도 영향 차단)
+                self.crosswalk_distance = 0
+            elif (
                 min_distance > 0
             ):  # TODO : 횡단보도 발견 시 시간 기록, 못 찾으면 0.3초간 이전값 유지
                 self.crosswalk_distance = min_distance
