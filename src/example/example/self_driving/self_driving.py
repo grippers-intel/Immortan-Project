@@ -155,6 +155,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
         self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
         self.crosswalk_distance = 0  # distance to the zebra crossing
+        self.crosswalk_last_seen_time = 0  # TODO : 깜빡임 방지용 마지막 감지 시간
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
         self.start_slow_down = False  # slowing down sign
@@ -340,14 +341,14 @@ class SelfDrivingNode(Node):
                     if time.time() - self.crosswalk_ignore_time > 3.5:
                         self.crosswalk_ignore = False
                 if (
-                    150 < self.crosswalk_distance
+                    100 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
-                ):  # TODO 00 : ignore 조건 추가
+                ):  # TODO 00 : ignore 조건 추가, 거리기준 150->100 (더 멀리서 감지)
                     self.count_crosswalk += 1
                     if (
-                        self.count_crosswalk == 3
-                    ):  # judge multiple times to prevent false detection
+                        self.count_crosswalk == 2
+                    ):  # judge multiple times to prevent false detection, 3->2 (더 빨리 반응)
                         self.count_crosswalk = 0
                         self.start_slow_down = True  # sign for slowing down
                         self.count_slow_down = (
@@ -486,9 +487,7 @@ class SelfDrivingNode(Node):
                         self.count_turn = 0
 
                         if not self.start_turn:
-                            self.pid.SetPoint = (
-                                160  # TODO 도로 중앙값 조절 (185=왼쪽치우침, 160=중앙)
-                            )
+                            self.pid.SetPoint = 185  # TODO 도로 중앙값 조절 (카메라 각도 바뀌어서 재조정 필요)
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
@@ -556,7 +555,10 @@ class SelfDrivingNode(Node):
         self.objects_info = msg.objects
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
-            self.crosswalk_distance = 0
+            if (
+                time.time() - self.crosswalk_last_seen_time > 0.3
+            ):  # TODO : 깜빡임 방지, 0.3초간 이전값 유지
+                self.crosswalk_distance = 0
         else:
             min_distance = 0
             found_traffic_light = False
@@ -601,7 +603,13 @@ class SelfDrivingNode(Node):
                 self.traffic_signs_status = None
 
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
-            self.crosswalk_distance = min_distance
+            if (
+                min_distance > 0
+            ):  # TODO : 횡단보도 발견 시 시간 기록, 못 찾으면 0.3초간 이전값 유지
+                self.crosswalk_distance = min_distance
+                self.crosswalk_last_seen_time = time.time()
+            elif time.time() - self.crosswalk_last_seen_time > 0.3:
+                self.crosswalk_distance = 0
 
 
 def main():
