@@ -105,7 +105,7 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # 현재 프레임에서 인식된 park 박스 면적(px^2)
-        self.park_area_threshold = 1000  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
+        self.park_area_threshold = 980  # 박스 면적이 이 값보다 크면 가까워진 것으로 판단
 
 
         self.start_turn_time_stamp = 0
@@ -567,7 +567,7 @@ class SelfDrivingNode(Node):
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 10
+                        self.count_right >= 11
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0
