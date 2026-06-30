@@ -295,7 +295,7 @@ class SelfDrivingNode(Node):
         time.sleep(self.turn_right_recover_time)
 
         self.mecanum_pub.publish(Twist())  # 정지
-        # self.doing_turn_right = False
+        self.doing_turn_right = False
         self.have_turn_right = True
 
     def main(self):
