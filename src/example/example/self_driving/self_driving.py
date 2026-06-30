@@ -508,8 +508,8 @@ class SelfDrivingNode(Node):
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
-                                        self.pid.output, -0.1, 0.1
-                                    )
+                                        self.pid.output, -0.18, 0.18
+                                    )  # TODO : 0.1->0.18 - Kp=0.4라 픽셀 오차 1만 넘어도 항상 클램프에 걸려있던 상태(사실상 최대 회전속도가 전부였음) - 드리프트 발생 시 복구가 너무 느려서(반경 3m) 차선을 통째로 놓치는 일이 반복됨, 클램프를 키워서 복구 속도 확보
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
