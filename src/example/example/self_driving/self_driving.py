@@ -160,7 +160,7 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
 
         self.count_crosswalk = 0
-        self.crosswalk_distance = 0  # distance to the zebra crossing
+        self.crosswalk_distance = 0  # crosswalk box bottom y-pixel; larger means closer
         self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
         # TODO-01 crosswalk 픽셀 기준으로 판단하기 위한 파라미터
         self.crosswalk_min_width = 80
@@ -170,8 +170,8 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 200  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-        # TODO : (150→200: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
+        self.crosswalk_stop_dist = 220  # crosswalk_distance가 이 값보다 크면 정지. 값↓=더 일찍, 값↑=더 늦게 멈춤.
+        # TODO: 첫 번째 횡단보도를 지나친 뒤 멈추는 문제 개선을 위해 center y 대신 box bottom y를 사용.
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
@@ -592,9 +592,9 @@ class SelfDrivingNode(Node):
 
                 if class_name == "crosswalk":
                     if (
-                        center[1] > min_distance
-                    ):  # Obtain recent y-axis pixel coordinate of the crosswalk
-                        min_distance = center[1]
+                        i.box[3] > min_distance
+                    ):  # Obtain nearest bottom y-axis pixel coordinate of the crosswalk
+                        min_distance = i.box[3]
                 elif class_name == "right":  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
