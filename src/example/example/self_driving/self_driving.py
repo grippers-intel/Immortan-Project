@@ -13,6 +13,9 @@ import threading
 import numpy as np
 import sdk.pid as pid
 import sdk.fps as fps
+
+# TODO : LED
+import sdk.fps as led
 from rclpy.node import Node
 import sdk.common as common
 
@@ -190,13 +193,14 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # obtain the area of the parking sign
+        self.park_miss = 0
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발
-        self.crosswalk_stop_dist = 300  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-        self.crosswalk_stop_duration = 1.0  # 정지 유지 시간(초)
+        self.crosswalk_stop_dist = 350  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_duration = 0.5  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
@@ -208,7 +212,7 @@ class SelfDrivingNode(Node):
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
         self.lane_setpoint = 130
         self.turn_threshold = 200
-        self.turn_angular_z = -0.8
+        self.turn_angular_z = -0.85
         self.angular_z_limit = 0.1
         self.lane_deadband = 0
         self.turn_confirm_count = 5
@@ -317,28 +321,6 @@ class SelfDrivingNode(Node):
                         self.crosswalk_stopping = False
                     self.stop = False
 
-                if 0 < self.park_x:
-                    self.get_logger().info(
-                        "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
-                        % (self.park_x, self.park_area, 1500)
-                    )
-                if 0 < self.park_x and self.park_area > 1500:
-                    # 표지판에 충분히 가까움 → 감속하며 주차 준비
-                    twist.linear.x = self.slow_down_speed
-                    if (
-                        not self.start_park
-                    ):  # 주차 시작 (표지판이 가까워 면적 임계 통과)
-                        self.count_park += 1
-                        if (
-                            self.count_park >= 15
-                        ):  # 연속 15프레임 가까우면 주차 동작 시작
-                            self.mecanum_pub.publish(Twist())
-                            self.start_park = True
-                            self.stop = True
-                            self.park_action()
-                else:
-                    self.count_park = 0
-
                 # line following processing
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(
                     binary_image, image.copy()
@@ -389,6 +371,32 @@ class SelfDrivingNode(Node):
                                         -self.angular_z_limit,
                                         self.angular_z_limit,
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
+
+                    # TODO : 주차 process 위치 변경 (lane detect 후 publish 전에 변경)
+                    if 0 < self.park_x:
+                        self.get_logger().info(
+                            "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
+                            % (self.park_x, self.park_area, 1500)
+                        )
+                    if 0 < self.park_x and self.park_area > 1500:
+                        # 표지판에 충분히 가까움 → 감속하며 주차 준비
+                        # TODO : 약간 오른쪽 보도록 조정
+                        twist.linear.x = self.slow_down_speed
+                        twist.angular.z = -0.5
+                        if (
+                            not self.start_park
+                        ):  # 주차 시작 (표지판이 가까워 면적 임계 통과)
+                            self.count_park += 1
+                            if (
+                                self.count_park >= 15
+                            ):  # 연속 15프레임 가까우면 주차 동작 시작
+                                self.mecanum_pub.publish(Twist())
+                                self.start_park = True
+                                self.stop = True
+                                self.park_action()
+                    else:
+                        if self.park_miss > 10:
+                            self.count_park = 0
                     self.mecanum_pub.publish(twist)
 
                 else:
@@ -426,23 +434,11 @@ class SelfDrivingNode(Node):
         self.mecanum_pub.publish(Twist())
         rclpy.shutdown()
 
-    def is_valid_crosswalk(self, box):
-        width = abs(box[2] - box[0])
-        height = abs(box[3] - box[1])
-        area = width * height
-        aspect_ratio = width / height if height > 0 else 0
-
-        return width >= 80 and height >= 20 and area >= 3500 and aspect_ratio >= 1.8
-
     # Obtain the target detection result
     def get_object_callback(self, msg):
-        valid_objects = []
-        for i in msg.objects:
-            if i.class_name == "crosswalk" and not self.is_valid_crosswalk(i.box):
-                continue
-            valid_objects.append(i)
-
-        self.objects_info = valid_objects
+        self.objects_info = msg.objects
+        self.park_x = -1
+        self.park_area = 0
 
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
@@ -477,11 +473,13 @@ class SelfDrivingNode(Node):
                     width = abs(box[2] - box[0])
                     height = abs(box[3] - box[1])
                     self.park_area = width * height
+                    self.park_miss = 0
 
-                elif (
-                    class_name == "red" or class_name == "green"
-                ):  # obtain the status of the traffic light
+                # TODO : Green 제외
+                elif class_name == "red":  # obtain the status of the traffic light
                     self.traffic_signs_status = i
+                else:
+                    self.park_miss += 1
 
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             self.crosswalk_distance = min_distance
