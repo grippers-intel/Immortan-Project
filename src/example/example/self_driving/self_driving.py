@@ -598,7 +598,9 @@ class SelfDrivingNode(Node):
                     # [수정] 우회전 이후(going_to_park)·주차 중엔 turn_right 재무장 금지(주차장서 두 번째 우회전 방지).
                     if right_area >= self.right_min_area and not self.going_to_park and not self.start_park and not self.parked:
                         self.count_right += 1
-                        if self.count_right >= 3:
+                        # (3→1: 정지 자세에서 표지판이 멀어 YOLO가 ~26프레임 중 1번만 검출 → 3회 못 채워 우회전 미발동.
+                        #  가까운(area≥right_min_area) 'right'를 1번만 봐도 트리거. 멀리서 오작동은 area 게이트가 막음)
+                        if self.count_right >= 1:
                             self.turn_right = True
                             self.count_right = 0
                 elif class_name == 'park':  # obtain the center coordinate of the parking sign
