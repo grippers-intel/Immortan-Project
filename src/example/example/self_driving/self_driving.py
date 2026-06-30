@@ -109,7 +109,7 @@ class SelfDrivingNode(Node):
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
-                "linear_x": 0.5,  # TODO : 0.3->0.5, 안정성 확인됐으니 속도 단계적으로 증가 시작
+                "linear_x": 0.4,  # TODO : 0.5->0.4, 0.5는 한번에 너무 크게 올려서(67%) 인식 불안정/차선 소실 발생 - 좀 더 점진적으로
                 "angular_z": 0.0,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
@@ -475,8 +475,8 @@ class SelfDrivingNode(Node):
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 3
-                            and not self.start_turn  # TODO : 6->3, 직진 속도 0.3->0.5 증가로 같은 프레임수당 이동거리가 늘어나서 그만큼 기준 낮춤 (속도 증가분 약 1.67배 보정)
+                            self.count_turn > 4
+                            and not self.start_turn  # TODO : 3->4, 속도 0.5->0.4로 낮춘 만큼 기준도 같이 재조정 (0.3 기준 6, 0.5 기준 3에 맞춰 0.4는 중간값 4)
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
