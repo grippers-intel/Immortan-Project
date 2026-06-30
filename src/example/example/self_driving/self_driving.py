@@ -193,6 +193,7 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # obtain the area of the parking sign
+        self.park_miss = 0
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
@@ -404,7 +405,8 @@ class SelfDrivingNode(Node):
                                 self.stop = True
                                 self.park_action()
                     else:
-                        self.count_park = 0
+                        if self.park_miss > 5:    
+                            self.count_park = 0
                     self.mecanum_pub.publish(twist)
 
                 else:
@@ -451,8 +453,10 @@ class SelfDrivingNode(Node):
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
+            self.park_miss += 1
         else:
             min_distance = 0
+            found_park = False
             for i in self.objects_info:
                 class_name = i.class_name
                 center = (
@@ -481,10 +485,16 @@ class SelfDrivingNode(Node):
                     width = abs(box[2] - box[0])
                     height = abs(box[3] - box[1])
                     self.park_area = width * height
+                    found_park = True
+                    self.park_miss = 0
 
                 # TODO : Green 제외
                 elif class_name == "red":  # obtain the status of the traffic light
                     self.traffic_signs_status = i
+            if not found_park:
+                self.park_miss += 1
+            else:
+                self.park_miss = 0
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             self.crosswalk_distance = min_distance
 
