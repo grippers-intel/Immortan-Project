@@ -475,8 +475,8 @@ class SelfDrivingNode(Node):
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 4
-                            and not self.start_turn  # TODO : 2->4, 2는 너무 예민해서(0.15초만에 트리거) 직선 구간에서도 너무 일찍 회전 시작함
+                            self.count_turn > 6
+                            and not self.start_turn  # TODO : 4->6, 회전 시작을 조금 더 늦춰서 더 앞으로 가서 회전하도록
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
@@ -538,7 +538,9 @@ class SelfDrivingNode(Node):
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if turn_elapsed > 1.0 and len(center_x) >= 4 and center_x[3] != -1:
                         self.count_turn_exit += 1  # TODO : 박스5->박스4 기준 변경 - 박스5는 끝까지 안 돌아오는 경우가 많아서 너무 늦게 탈출/영영 탈출 못함
-                        if self.count_turn_exit > 5:
+                        if (
+                            self.count_turn_exit > 2
+                        ):  # TODO : 5->2, 박스4 재인식 후에도 확인 대기시간이 길어서 불필요하게 더 도는 문제 - 확인 프레임 줄여서 종료를 더 빠르게
                             self.start_turn = False
                             self.count_turn = 0
                             self.count_turn_exit = 0
