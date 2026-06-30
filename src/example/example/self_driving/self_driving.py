@@ -115,8 +115,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.2,
-                "angular_z": -0.2,
+                "linear_x": 0.15,
+                "angular_z": -0.4,  # TODO : -0.2->-0.4 (회전 반경 1m->0.375m, 도로폭 45cm에 맞게 더 날카롭게)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -573,7 +573,9 @@ class SelfDrivingNode(Node):
 
                 if class_name == "crosswalk":
                     box_height = abs(i.box[1] - i.box[3])  # TODO 00 : 박스 높이 계산
-                    if box_height > 30:  # TODO 00 : 오인식 방지 기준값 (튜닝 필요)
+                    if (
+                        box_height > 50
+                    ):  # TODO 00 : 오인식 방지 기준값 30->50 (작은 오인식 필터링)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
