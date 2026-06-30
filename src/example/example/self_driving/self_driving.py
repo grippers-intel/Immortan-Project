@@ -394,9 +394,10 @@ class SelfDrivingNode(Node):
 
                 # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
                 # [디버그 로그] crosswalk=거리, stopping=정지중, passed=통과처리됨, sign=신호등상태
-                self.get_logger().info('\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s\033[0m' % (
+                self.get_logger().info('\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s turn_right=%s doing=%s\033[0m' % (
                     self.crosswalk_distance, self.crosswalk_stopping, self.crosswalk_passed,
-                    self.traffic_signs_status.class_name if self.traffic_signs_status is not None else 'none'))
+                    self.traffic_signs_status.class_name if self.traffic_signs_status is not None else 'none',
+                    self.turn_right, self.doing_turn_right))
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
@@ -582,7 +583,7 @@ class SelfDrivingNode(Node):
                 elif class_name == 'right':  # obtain the right turning sign
                     self.count_right += 1
                     self.count_right_miss = 0
-                    if self.count_right >= 5:  # If it is detected multiple times, take the right turning sign to true
+                    if self.count_right >= 3:  # (5→3: 속도 2배+FPS저하로 표지판을 5번 못보고 지나쳐 우회전 미발동하던 문제)
                         self.turn_right = True
                         self.count_right = 0
                 elif class_name == 'park':  # obtain the center coordinate of the parking sign
