@@ -458,8 +458,8 @@ class SelfDrivingNode(Node):
 
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[0] == -1 and center_x[2] == -1
-                    ):  # TODO 01 : 박스 2번 없을 때 우회전 감지
+                        len(center_x) >= 5 and center_x[0] == -1
+                    ):  # TODO 01 : 박스1(맨앞)만 -1이어도 우회전 감지 (박스2 조건 제거, 실제 코너에서 박스2는 -1 안됨)
                         self.count_turn += 1
                         if (
                             self.count_turn > 10 and not self.start_turn
