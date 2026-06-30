@@ -123,7 +123,8 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
-        self.turn_right_forward_time = 1.5  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+        self.turn_right_forward_time = 0.8  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+                                            #   (1.5→0.8: 횡단보도를 더 일찍 멈추니 진입점이 깊어져 직진 줄임)
         self.turn_right_duration = 3.5   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
                                          #   (3.0→3.2→3.5: 계속 90도에 모자라 회전량 더 증가)
 
@@ -139,8 +140,8 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 350      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-                                            #   (150→350: 멀리서 미리 멈춰 신호등을 못 보던 문제 해결)
+        self.crosswalk_stop_dist = 280      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+                                            #   (350→280: 속도 2배라 더 일찍(멀리서) 멈춰야 밟지 않음)
         self.crosswalk_min_area = 3000      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분을
                                             #   한프레임씩 횡단보도로 오검출하던 것 제거. 진짜 횡단보도 미인식이면 ↓
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
@@ -167,11 +168,12 @@ class SelfDrivingNode(Node):
         self.turn_threshold = 200
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
-        #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
-        self.turn_angular_z = -0.45
+        #   속도 0.15→0.3로 2배 올려 반경이 2배로 커져 코너 못 돌고 라인 넘어감 → -0.45→-0.9로 2배.
+        #   ※ normal_speed를 바꾸면 이 값도 같은 비율로 바꿔야 함(반경 = speed/|angular|).
+        self.turn_angular_z = -0.9
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
-        self.angular_z_limit = 0.1
+        self.angular_z_limit = 0.2
         # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
         #   조향하지 않고 직진(미세 진동 제거). 0이면 비활성(원래 동작).
         #   [복원] 효과가 뚜렷하지 않아 6 → 0(비활성)으로 되돌림. 필요시 4~8로 재시도 가능.
@@ -423,7 +425,8 @@ class SelfDrivingNode(Node):
                     _, _, _, right_x = self.lane_detect_right(binary_image, result_image)
                     self.get_logger().info('\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m' % (
                         right_x, self.park_lane_setpoint))
-                    twist.linear.x = self.normal_speed
+                    # 주차 표지판이 보이면(park_x>0) 감속해 정밀 접근(지나침 방지). 아직 안 보이면 복도를 순항속도로.
+                    twist.linear.x = self.slow_down_speed if self.park_x > 0 else self.normal_speed
                     if right_x >= 0:
                         self.pid.SetPoint = self.park_lane_setpoint
                         self.pid.update(right_x)
