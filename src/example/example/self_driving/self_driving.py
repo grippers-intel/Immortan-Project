@@ -50,6 +50,12 @@ class SelfDrivingNode(Node):
         # signal.signal(signal.SIGINT, self.shutdown)
         self.machine_type = os.environ.get('MACHINE_TYPE')
         self.lane_detect = lane_detect.LaneDetector("yellow")
+        # [추가] 우회전 후 주차장까지 갈 때 쓰는 '우측 라인' 전용 검출기.
+        #   기본 lane_detect는 ROI가 좌측 절반(x 0~320)만 봐서 좌측 라인을 추종함.
+        #   주차 경로(중앙 복도)에선 좌측에 교차로 갈림길이 있어 좌측 라인을 따라가면 이탈 →
+        #   우측 절반(x 320~640) ROI로 우측 라인을 보게 함. near_x는 우측 절반 내 0~320 좌표.
+        self.lane_detect_right = lane_detect.LaneDetector("yellow")
+        self.lane_detect_right.set_roi(((338, 360, 320, 640, 0.7), (292, 315, 320, 640, 0.2), (248, 270, 320, 640, 0.1)))
 
         self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)
         self.servo_state_pub = self.create_publisher(SetPWMServoState, 'ros_robot_controller/pwm_servo/set_state', 1)
@@ -101,7 +107,8 @@ class SelfDrivingNode(Node):
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
         self.park_min_area = 1500  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
         self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
-        self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 차선추종 끄고 직진만(중앙 교차로에서 좌측 라인으로 이탈 방지)
+        self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
+        self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -391,13 +398,22 @@ class SelfDrivingNode(Node):
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 if self.going_to_park and not self.stop:
-                    # [추가] 우회전 후 주차장까지는 차선추종을 끄고 직진만.
-                    #   중앙 교차로에서 갈라지는 좌측 노란선을 PID가 잡아 좌측 길로 이탈하던 문제 방지.
-                    #   주차 표지판이 가까워지면(park_area>min) 위 주차 블록에서 going_to_park=False 되며 종료.
+                    # [추가] 우회전 후 주차장까지는 '우측 라인'을 PID로 추종.
+                    #   좌측엔 중앙 교차로 갈림길이 있어 기존(좌측) 차선추종은 좌측 길로 이탈했음.
+                    #   우측 절반 ROI 검출기로 우측 라인 x(right_x)를 구해 park_lane_setpoint에 맞춤.
+                    #   우측 라인이 안 보이면(-1) 직진 폴백. 주차 표지판이 가까워지면 위 주차 블록에서 종료.
+                    _, _, _, right_x = self.lane_detect_right(binary_image, result_image)
+                    self.get_logger().info('\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m' % (
+                        right_x, self.park_lane_setpoint))
                     twist.linear.x = self.normal_speed
-                    twist.angular.z = 0.0
+                    if right_x >= 0:
+                        self.pid.SetPoint = self.park_lane_setpoint
+                        self.pid.update(right_x)
+                        twist.angular.z = common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)
+                    else:
+                        self.pid.clear()
+                        twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
                     self.mecanum_pub.publish(twist)
-                    self.pid.clear()
                 elif lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전 동작 중엔 차선추종 양보
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
@@ -493,9 +509,13 @@ class SelfDrivingNode(Node):
                         self.turn_right = True
                         self.count_right = 0
                 elif class_name == 'park':  # obtain the center coordinate of the parking sign
-                    self.park_x = center[0]
                     # [수정] 박스 면적 = 가로*세로. 표지판에 가까울수록 큼 → 거리 지표로 사용.
-                    self.park_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                    #   한 프레임에 park 박스가 여러 개(진짜+오검출) 잡히면 값이 큰박스↔작은박스로 튐 →
+                    #   가장 큰(=가장 가까운/신뢰도 높은) 박스만 사용해 안정화.
+                    area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                    if area > self.park_area:
+                        self.park_area = area
+                        self.park_x = center[0]
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                
