@@ -457,6 +457,9 @@ class SelfDrivingNode(Node):
                 if not self.start_slow_down and lane_x is not None and lane_x > 0:
                     twist.linear.x = self.drive_params["straight"]["linear_x"]
 
+                self.get_logger().info(
+                    f"[DEBUG] stop:{self.stop}, start_turn:{self.start_turn}, count_turn:{self.count_turn}, start_slow_down:{self.start_slow_down}"
+                )  # TODO : 우회전 안되는 원인 추적용 → 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5 and center_x[4] == -1
@@ -593,8 +596,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        50 < box_height < 180 and 80 < box_width < 550
-                    ):  # TODO 00 : 오인식 방지 기준값 (너비 상한 400->550, 진짜 횡단보도 인식 안되던 문제)
+                        50 < box_height < 180 and 80 < box_width
+                    ):  # TODO 00 : 너비 상한 제거 (실측: 진짜 횡단보도가 가까워질수록 폭이 매우 넓어짐 - 높이로만 필터링)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
