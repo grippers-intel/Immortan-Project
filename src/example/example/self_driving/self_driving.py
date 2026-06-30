@@ -101,6 +101,7 @@ class SelfDrivingNode(Node):
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
         self.park_min_area = 1500  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
         self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
+        self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 차선추종 끄고 직진만(중앙 교차로에서 좌측 라인으로 이탈 방지)
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -304,6 +305,7 @@ class SelfDrivingNode(Node):
         time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())          # 정지
         self.doing_turn_right = False              # 차선추종 재개
+        self.going_to_park = True                  # 이후 주차장까지는 직진만(좌측 라인 이탈 방지)
 
     def main(self):
         while self.is_running:
@@ -375,6 +377,7 @@ class SelfDrivingNode(Node):
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
+                            self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
                             threading.Thread(target=self.park_action).start()
                 else:
                     self.count_park = 0
@@ -387,7 +390,15 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전 동작 중엔 차선추종 양보
+                if self.going_to_park and not self.stop:
+                    # [추가] 우회전 후 주차장까지는 차선추종을 끄고 직진만.
+                    #   중앙 교차로에서 갈라지는 좌측 노란선을 PID가 잡아 좌측 길로 이탈하던 문제 방지.
+                    #   주차 표지판이 가까워지면(park_area>min) 위 주차 블록에서 going_to_park=False 되며 종료.
+                    twist.linear.x = self.normal_speed
+                    twist.angular.z = 0.0
+                    self.mecanum_pub.publish(twist)
+                    self.pid.clear()
+                elif lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전 동작 중엔 차선추종 양보
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
                         if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
