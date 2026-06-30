@@ -466,8 +466,9 @@ class SelfDrivingNode(Node):
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5
-                        and center_x[0]
-                        != -1  # TODO : 박스1(제일 먼 곳)은 살아있어야 함 - 차선 완전히 놓친 것과 진짜 코너를 구분 (전부 -1인데 회전 오발동하던 버그 수정)
+                        and 0
+                        < center_x[0]
+                        < 280  # TODO : 박스1이 살아있을 뿐 아니라 정상 범위(끝쪽으로 치우치지 않음)여야 함 - 실패한 회전들은 트리거 직전 박스1,2가 297~308까지 치우쳐 있었음 (진짜 코너 vs 이미 드리프트된 상태 구분)
                         and center_x[3] == -1
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_raw_last_seen_time
