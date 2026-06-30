@@ -407,8 +407,10 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if (self.going_to_park or self.park_x > 0) and not self.stop:
+                if not self.start_park and (self.going_to_park or self.park_x > 0) and not self.stop:
                     # [추가] 우회전 후(going_to_park) 또는 주차 표지판이 보일 때(park_x>0)는 '우측 라인'을 PID로 추종.
+                    #   [중요] not self.start_park 가드: 주차 동작 시작 후엔 main 루프가 cmd_vel을 발행하면
+                    #   park_action 스레드의 횡이동을 덮어써서 주차가 안 됨(직진해 표지판 지나침). 그래서 양보.
                     #   좌측엔 중앙 교차로 갈림길이 있어 기존(좌측) 차선추종은 좌측 길로 이탈했음.
                     #   park_x>0 조건 덕분에 어떻게 도달했든(실주행/수동) 주차 표지판만 보이면 접근 모드로 들어감.
                     #   우측 절반 ROI 검출기로 우측 라인 x(right_x)를 구해 park_lane_setpoint에 맞춤.
@@ -425,7 +427,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                         twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
                     self.mecanum_pub.publish(twist)
-                elif lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전 동작 중엔 차선추종 양보
+                elif not self.start_park and lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전/주차 동작 중엔 차선추종 양보
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
                         if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
