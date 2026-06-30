@@ -462,7 +462,10 @@ class SelfDrivingNode(Node):
                 )  # TODO : 우회전 안되는 원인 추적용 → 추가
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
+                        len(center_x) >= 5
+                        and center_x[3] == -1
+                        and center_x[4] == -1
+                        and not self.crosswalk_ignore  # TODO : 횡단보도 통과 직후(3.5초)는 차선인식 불안정 → 회전감지 보류
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
@@ -646,3 +649,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+##
