@@ -390,7 +390,7 @@ class SelfDrivingNode(Node):
                             self.mecanum_pub.publish(Twist())
                     else:
                         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
-                        if self.crosswalk_distance < 70:
+                        if self.crosswalk_distance < 90:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
                         if self.stop_reason == "crosswalk":
@@ -568,7 +568,7 @@ class SelfDrivingNode(Node):
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 9
+                        self.count_right >= 5
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0 
