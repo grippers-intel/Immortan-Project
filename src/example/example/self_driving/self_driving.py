@@ -458,12 +458,12 @@ class SelfDrivingNode(Node):
 
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[0] == -1
-                    ):  # TODO 01 : 박스1(맨앞)만 -1이어도 우회전 감지 (박스2 조건 제거, 실제 코너에서 박스2는 -1 안됨)
+                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
+                    ):  # TODO 01 : 박스4,5(먼쪽) 둘다 -1일때 우회전 감지 (실측: 코너에서 박스1,2,3은 보이고 4,5만 사라짐)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 10 and not self.start_turn
-                        ):  # TODO 01 : 10프레임 연속 → 수정
+                            self.count_turn > 5 and not self.start_turn
+                        ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
@@ -472,7 +472,9 @@ class SelfDrivingNode(Node):
                             )
                             self.stop = False  # TODO 01 : 정지 플래그 리셋
                     else:
-                        self.count_turn = 0  # TODO 01 : else로 리셋 → 추가
+                        self.count_turn = max(
+                            0, self.count_turn - 1
+                        )  # TODO 01 : 완전 리셋 대신 서서히 감소 (깜빡임에 강하게)
                     if self.start_turn:
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = self.drive_params["turn_right"][
