@@ -109,14 +109,14 @@ class SelfDrivingNode(Node):
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
-                "linear_x": 0.3,
+                "linear_x": 0.5,  # TODO : 0.3->0.5, 안정성 확인됐으니 속도 단계적으로 증가 시작
                 "angular_z": 0.0,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.27,
-                "angular_z": -0.64,  # TODO : 0.226/-0.53 -> 0.27/-0.64 (반지름 동일 유지, 비율 1.2배 증가 - 왼쪽 바퀴 속도 0.3->0.36 직진보다 빠르게)
+                "linear_x": 0.31,
+                "angular_z": -0.74,  # TODO : 0.27/-0.64 -> 0.31/-0.74 (반지름 동일 유지, 비율 1.15배 증가 - 회전에 걸리는 시간 단축, 박스4 재인식까지 평균 2.3~2.6초 걸리던 것 줄이기)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -475,8 +475,8 @@ class SelfDrivingNode(Node):
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
-                            self.count_turn > 6
-                            and not self.start_turn  # TODO : 4->6, 회전 시작을 조금 더 늦춰서 더 앞으로 가서 회전하도록
+                            self.count_turn > 3
+                            and not self.start_turn  # TODO : 6->3, 직진 속도 0.3->0.5 증가로 같은 프레임수당 이동거리가 늘어나서 그만큼 기준 낮춤 (속도 증가분 약 1.67배 보정)
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
