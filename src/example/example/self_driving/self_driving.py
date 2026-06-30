@@ -125,7 +125,7 @@ class SelfDrivingNode(Node):
             -0.7
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         # 우회전 동작 파라미터
-        self.turn_right_forward_time = 1.0  # 우회전 전에 더 앞으로 가는 시간(초)
+        self.turn_right_forward_time = 1.5  # 우회전 전에 더 앞으로 가는 시간(초)
         self.turn_right_duration = (
             2.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
@@ -567,7 +567,7 @@ class SelfDrivingNode(Node):
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 8
+                        self.count_right >= 10
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0
