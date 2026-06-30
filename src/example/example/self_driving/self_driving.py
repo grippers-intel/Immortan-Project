@@ -473,6 +473,10 @@ class SelfDrivingNode(Node):
                         != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
                         and center_x[3] == -1
                         and center_x[4] == -1
+                        and not (
+                            self.crosswalk_ignore
+                            and time.time() - self.crosswalk_ignore_time < 1.1
+                        )  # TODO : 횡단보도 직후 1.1초간 추가 차단 - 드리프트 없이 안정적이지만 잘못된 값(가짜 코너)이 나오는 경우 발견, 실제 코너는 1.27초 이후부터 나타남 → 추가
                     ):
                         if self.count_turn == 0:
                             self.turn_count_start_box1 = center_x[
