@@ -140,6 +140,7 @@ class SelfDrivingNode(Node):
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
+        self.count_turn_exit = 0  # TODO : 회전 종료 판단용 카운트 → 추가
         self.start_turn = False  # start to turn
 
         self.count_right = 0
@@ -516,11 +517,25 @@ class SelfDrivingNode(Node):
                     self.pid.clear()
                     # TODO 01 : start_turn 탈출 조건 else 밖으로 이동 (차선 없어도 탈출 가능)
                 if self.start_turn:
+                    turn_elapsed = time.time() - self.start_turn_time_stamp
+                    # TODO : 최소 1초는 회전 유지 (시작 직후 박스5 깜빡임으로 바로 탈출 방지)
+                    if turn_elapsed > 1.0 and len(center_x) >= 5 and center_x[4] != -1:
+                        self.count_turn_exit += (
+                            1  # TODO : 박스5 다시 보이면 회전 끝난 것으로 판단
+                        )
+                        if self.count_turn_exit > 5:
+                            self.start_turn = False
+                            self.count_turn = 0
+                            self.count_turn_exit = 0
+                    else:
+                        self.count_turn_exit = max(0, self.count_turn_exit - 1)
+
                     if (
-                        time.time() - self.start_turn_time_stamp > 4.0
-                    ):  # TODO 01 : 4초 후 강제 탈출
+                        turn_elapsed > 6.0
+                    ):  # TODO 01 : 4->6초, 차선 못찾아도 안전장치로 강제 탈출
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
+                        self.count_turn_exit = 0
 
                 if self.objects_info:
                     for i in self.objects_info:
@@ -578,8 +593,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        50 < box_height < 180 and 80 < box_width < 400
-                    ):  # TODO 00 : 오인식 방지 기준값 (너무 작거나 너무 커도 제외)
+                        50 < box_height < 180 and 80 < box_width < 550
+                    ):  # TODO 00 : 오인식 방지 기준값 (너비 상한 400->550, 진짜 횡단보도 인식 안되던 문제)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
