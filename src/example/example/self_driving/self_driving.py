@@ -346,7 +346,7 @@ class SelfDrivingNode(Node):
 
                 # TODO : 우회전 표지 감지 시 Parking까지 수행 후 shutdown
 
-                if self.turn_right and not self.doing_turn_right:
+                if self.turn_right and not self.doing_turn_right and not self.crosswalk_stopping:
                     self.mecanum_pub.publish(Twist())
                     time.sleep(1)
                     self.turn_right = False
@@ -571,7 +571,7 @@ class SelfDrivingNode(Node):
                         self.count_right >= 10
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
-                        self.count_right = 0
+                        # self.count_right = 0
                 elif (
                     class_name == "park"
                 ):  # obtain the center coordinate of the parking sign
