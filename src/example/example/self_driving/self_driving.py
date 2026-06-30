@@ -124,8 +124,8 @@ class SelfDrivingNode(Node):
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         self.turn_right_forward_time = 1.5  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
-        self.turn_right_duration = 3.2   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
-                                         #   (3.0→3.2: 90도에 살짝 모자라 회전량 증가)
+        self.turn_right_duration = 3.5   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+                                         #   (3.0→3.2→3.5: 계속 90도에 모자라 회전량 더 증가)
 
         self.last_park_detect = False
         self.count_park = 0  
@@ -363,7 +363,7 @@ class SelfDrivingNode(Node):
                             self.turn_right = False
                             self.doing_turn_right = True
                             threading.Thread(target=self.turn_right_action, daemon=True).start()
-                    else:
+                    elif not self.start_park:          # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
                         self.stop = True               # 정지 유지
                         self.mecanum_pub.publish(Twist())
                 else:
@@ -384,14 +384,20 @@ class SelfDrivingNode(Node):
                     twist.linear.x = self.slow_down_speed
                     if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
                         self.count_park += 1
-                        if self.count_park >= 8:  # 연속 8프레임 가까우면 주차 시작 (15→8: 검출이 드문드문이라 완화)
+                        # [진단 로그] 카운트 진행상황 확인 → 8에 도달하는지 보기
+                        self.get_logger().info('\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m' % (self.count_park, self.park_area))
+                        if self.count_park >= 8:  # 8프레임 이상 가까우면 주차 시작
+                            self.get_logger().info('\033[1;41m=== PARK START ===\033[0m')
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
                             self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
                             threading.Thread(target=self.park_action).start()
                 else:
-                    self.count_park = 0
+                    # [수정] 검출이 한 프레임 끊겨도 0으로 리셋하지 않고 1씩만 감소 → 드문드문 검출에 강하게.
+                    #   (기존 self.count_park=0 은 한 번만 놓쳐도 처음부터 다시 세서 8을 못 채웠음)
+                    if self.count_park > 0:
+                        self.count_park -= 1
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
