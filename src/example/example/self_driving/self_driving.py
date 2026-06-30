@@ -363,19 +363,14 @@ class SelfDrivingNode(Node):
                             )
                             self.crosswalk_stopping = False
                             self.stop = False
-                            self.stop_reason = None
                         else:
                             self.stop = True  # 정지 유지
-                            self.stop_reason = "crosswalk"
                             self.mecanum_pub.publish(Twist())
                     else:
                         # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
                         if self.crosswalk_distance < 70:
                             self.crosswalk_passed = False
                             self.crosswalk_stopping = False
-                        if self.stop_reason == "crosswalk":
-                            self.stop = False
-                            self.stop_reason = None
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
