@@ -193,7 +193,6 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0  # obtain the area of the parking sign
-        self.park_miss = 0
 
         self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
@@ -234,7 +233,7 @@ class SelfDrivingNode(Node):
             twist.linear.x = 0.0
             twist.linear.y = -0.2
             self.mecanum_pub.publish(twist)
-            time.sleep(0.38 / 0.2)
+            time.sleep(1)
         self.mecanum_pub.publish(Twist())
         self.shutdown()
 
@@ -373,12 +372,7 @@ class SelfDrivingNode(Node):
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
 
                     # TODO : 주차 process 위치 변경 (lane detect 후 publish 전에 변경)
-                    if 0 < self.park_x:
-                        self.get_logger().info(
-                            "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
-                            % (self.park_x, self.park_area, 1500)
-                        )
-                    if 0 < self.park_x and self.park_area > 1500:
+                    if 0 < self.park_x and self.park_area > 1000:
                         # 표지판에 충분히 가까움 → 감속하며 주차 준비
                         # TODO : 약간 오른쪽 보도록 조정
                         twist.linear.x = self.slow_down_speed
@@ -388,15 +382,14 @@ class SelfDrivingNode(Node):
                         ):  # 주차 시작 (표지판이 가까워 면적 임계 통과)
                             self.count_park += 1
                             if (
-                                self.count_park >= 15
+                                self.count_park >= 10
                             ):  # 연속 15프레임 가까우면 주차 동작 시작
                                 self.mecanum_pub.publish(Twist())
                                 self.start_park = True
                                 self.stop = True
                                 self.park_action()
                     else:
-                        if self.park_miss > 10:
-                            self.count_park = 0
+                        self.count_park = 0
                     self.mecanum_pub.publish(twist)
 
                 else:
@@ -473,14 +466,10 @@ class SelfDrivingNode(Node):
                     width = abs(box[2] - box[0])
                     height = abs(box[3] - box[1])
                     self.park_area = width * height
-                    self.park_miss = 0
 
                 # TODO : Green 제외
                 elif class_name == "red":  # obtain the status of the traffic light
                     self.traffic_signs_status = i
-                else:
-                    self.park_miss += 1
-
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             self.crosswalk_distance = min_distance
 
