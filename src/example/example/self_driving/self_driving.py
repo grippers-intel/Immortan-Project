@@ -196,7 +196,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_distance = 0  # distance to the zebra crossing
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발
-        self.crosswalk_stop_dist = 200  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_dist = 150  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         self.crosswalk_stop_duration = 1.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
@@ -238,15 +238,13 @@ class SelfDrivingNode(Node):
     # 우회전 동작
     def turn_right_action(self):
         twist = Twist()
-        twist.linear.x = 0.1
-        self.mecanum_pub.publish(twist)
-        time.sleep(3)
         twist.linear.x = self.turn_right_speed  # 전진하며
         twist.angular.z = self.turn_right_angular  # 우회전
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())  # 정지
         self.doing_turn_right = False  # 차선추종 재개
+        self.have_turn_right = True
 
     def main(self):
         while self.is_running:
@@ -286,8 +284,6 @@ class SelfDrivingNode(Node):
                 # 우회전 동작 처리 (규칙: 우회전 표지판 인식 후 횡단보도 정지 → 우회전 수행)
 
                 if self.turn_right and not self.doing_turn_right:
-                    # self.mecanum_pub.publish(Twist())
-                    # time.sleep(0.5)
                     self.turn_right = False
                     self.doing_turn_right = True
                     self.turn_right_action()
@@ -402,18 +398,15 @@ class SelfDrivingNode(Node):
                                         self.angular_z_limit,
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
                     self.mecanum_pub.publish(twist)
+                elif self.have_turn_right:
+                    twist.linear.x = self.normal_speed
+                    self.mecanum_pub.publish(twist)
+                    time.sleep(6)
+                    threading.Thread(target=self.park_action, daemon=True).start()
+
                 else:
                     # TODO - 차선 인식 실패 시 정지 or 감속 or 회전 등 처리
                     self.pid.clear()
-                    # if (
-                    #     not self.stop
-                    #     and not self.doing_turn_right
-                    #     and not self.start_park
-                    # ):
-                    #     twist.linear.x = self.slow_down_speed
-                    #     twist.angular.z = 0.1
-                    #     self.mecanum_pub.publish(twist)
-                    #     time.sleep(0.3)
 
                 if self.objects_info:
                     for i in self.objects_info:
@@ -446,15 +439,27 @@ class SelfDrivingNode(Node):
         self.mecanum_pub.publish(Twist())
         rclpy.shutdown()
 
+    def is_valid_crosswalk(self, box):
+        width = abs(box[2] - box[0])
+        height = abs(box[3] - box[1])
+        area = width * height
+        aspect_ratio = width / height if height > 0 else 0
+
+        return width >= 80 and height >= 20 and area >= 3500 and aspect_ratio >= 1.8
+
     # Obtain the target detection result
     def get_object_callback(self, msg):
-        self.objects_info = msg.objects
+        valid_objects = []
+        for i in msg.objects:
+            if i.class_name == "crosswalk" and not self.is_valid_crosswalk(i.box):
+                continue
+            valid_objects.append(i)
+
+        self.objects_info = valid_objects
+
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             self.crosswalk_distance = 0
-            # TODO - 객체 미탐지 시 초기화
-            # self.park_area = 0
-            # self.park_x = -1
         else:
             min_distance = 0
             for i in self.objects_info:
