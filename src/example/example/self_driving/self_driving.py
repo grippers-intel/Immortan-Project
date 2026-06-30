@@ -503,6 +503,12 @@ class SelfDrivingNode(Node):
                         if not self.start_turn:
                             self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230, 차량이 조금 더 오른쪽으로 가도록 미세 조정)
                             if (
+                                self.crosswalk_ignore
+                                and time.time() - self.crosswalk_ignore_time < 0.7
+                            ):  # TODO : 횡단보도 정지 직후 줄무늬 위에서 출발 시 차선 오인식으로 급조향하는 문제 방지 - 0.7초간 직진만 → 추가
+                                twist.angular.z = 0.0
+                                self.pid.clear()
+                            elif (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
                                 self.pid.update(lane_x)
@@ -605,8 +611,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        25 < box_height < 180 and 80 < box_width
-                    ):  # TODO : 15->25 (너무 일찍 멈추는 문제 발생 - 라인 밟음 방지와 너무 멀리 정지의 중간값으로 조정)
+                        15 < box_height < 180 and 80 < box_width
+                    ):  # TODO : 25->15 - 카메라 각도를 위로 변경한 후 횡단보도가 더 납작하게(높이 16~24, 너비 295~634) 잡히는 경우가 많아 인식을 자주 놓침, 가짜 오인식 노이즈는 높이 4~9 수준이라 15도 안전
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
