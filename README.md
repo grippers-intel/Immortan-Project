@@ -75,7 +75,7 @@ TODO
 6/30 breifing & TODO
 1. 현재 parking(jay) & 우회전 부분(hease) & crosswalk 사이즈 제한 설정(sysy009) 제일 좋은 상황
 -> 우회전 표지판 포착 시 회전하도록 하드코딩
-2. 신호등 detecting 개선
+2. 신호등 detecting 개선(신호등의 green 크기에 대한 제한을 설정하는 것으로 detect 부분 개선 가능)
 3. lane detect 후 전체적으로 차체 죄편향되어 있는 부분 수정
 4. 속도(linear_x, 0.3) & 회전 각(angular_z,-0.8) default 값 수정
 -> lane detect 후의 시간이 달라질 수 있음
@@ -83,4 +83,4 @@ TODO
 6. 기판의 발열로 인한 버벅임
 7. 처음 시작 시 lane detect하지 못하면 출발하지 않는 경우가 있음
 8. 첫 번째 코너링 전에 갑자기 파킹하는 부분 -> 파킹 표지판 사이즈 크기의 조건을 추가해주면 어느 정도 조절 가능
-9. 신호등의 green 크기에 대한 제한을 설정하는 것으로 detect 부분 개선 가능
+
