@@ -197,6 +197,11 @@ class SelfDrivingNode(Node):
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
+        # [신호등] 초록불을 멀어서 못 잡아 못 출발하던 문제 → '빨강 신선도' 방식.
+        #   빨강이 최근(red_hold_time 이내)에 보였으면 빨강으로 간주. 초록으로 바뀌면 빨강이 사라지고
+        #   red_hold_time 후 is_red=False → 출발(초록을 직접 검출하지 않아도 됨). 빨강은 잘 잡히는 전제.
+        self.red_last_seen_time = 0
+        self.red_hold_time = 1.5   # 빨강 마지막 검출 후 이 시간(초)까지 빨강으로 유지. 너무 빨리 출발하면 ↑
 
         self.object_sub = None
         self.image_sub = None
@@ -408,14 +413,17 @@ class SelfDrivingNode(Node):
                         self.crosswalk_stopping = True
                         self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
                     # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
-                    is_red = (self.traffic_signs_status is not None and self.traffic_signs_status.class_name == 'red')
+                    # [수정] '빨강 신선도' 방식: 빨강이 최근에 보였는지로 판단(초록 미검출 의존 제거).
+                    is_red = (time.time() - self.red_last_seen_time) < self.red_hold_time
                     stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
                     if stopped_enough and not is_red:
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
                         self.crosswalk_stopping = False
                         self.stop = False
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
-                        if self.turn_right and not self.doing_turn_right:
+                        #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
+                        #   재무장돼 주차 중에 두 번째 우회전이 실행되어 주차를 망치던 버그 방지.
+                        if self.turn_right and not self.doing_turn_right and not self.going_to_park and not self.start_park:
                             self.turn_right = False
                             self.doing_turn_right = True
                             threading.Thread(target=self.turn_right_action, daemon=True).start()
@@ -587,7 +595,8 @@ class SelfDrivingNode(Node):
                     right_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
                     self.get_logger().info('\033[1;31mright sign area=%d (min=%d) count=%d\033[0m' % (
                         right_area, self.right_min_area, self.count_right))
-                    if right_area >= self.right_min_area:
+                    # [수정] 우회전 이후(going_to_park)·주차 중엔 turn_right 재무장 금지(주차장서 두 번째 우회전 방지).
+                    if right_area >= self.right_min_area and not self.going_to_park and not self.start_park and not self.parked:
                         self.count_right += 1
                         if self.count_right >= 3:
                             self.turn_right = True
@@ -602,6 +611,8 @@ class SelfDrivingNode(Node):
                         self.park_x = center[0]
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
+                    if class_name == 'red':
+                        self.red_last_seen_time = time.time()  # [신호등] 빨강 신선도 갱신
                
 
             self.get_logger().info('\033[1;32m%s\033[0m' % class_name)
