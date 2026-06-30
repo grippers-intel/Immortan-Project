@@ -127,9 +127,10 @@ class SelfDrivingNode(Node):
         # 우회전 동작 파라미터
         self.turn_right_forward_time = 1.0  # 우회전 전에 더 앞으로 가는 시간(초)
         self.turn_right_duration = (
-            2.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            2.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
-        self.turn_right_recover_time = 0.5  # 회전 종료 후 직진 회복을 위한 짧은 유지 시간
+        self.turn_right_recover_time = 0.5  # 우회전 후 직진 회복 전 잠깐 보정 시간(초)
+        self.turn_right_recover_angular = 0.25  # 우회전 후 반대로 틀어주는 각속도(양수=왼쪽)
 
         self.last_park_detect = False
         self.count_park = 0
@@ -287,14 +288,14 @@ class SelfDrivingNode(Node):
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
 
-        # 회전이 끝난 뒤에는 잠깐 직진해 정렬한 다음 차선추종으로 복귀
+        # 우회전 종료 후 방향 보정: 너무 왼쪽으로 치우치지 않도록 살짝 오른쪽으로 보정
         twist.linear.x = self.normal_speed
-        twist.angular.z = 0.0
+        twist.angular.z = -self.turn_right_recover_angular
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_recover_time)
 
         self.mecanum_pub.publish(Twist())  # 정지
-        self.doing_turn_right = False
+        # self.doing_turn_right = False
         self.have_turn_right = True
 
     def main(self):
