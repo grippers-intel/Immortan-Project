@@ -407,15 +407,15 @@ class SelfDrivingNode(Node):
                 else:
                     # TODO - 차선 인식 실패 시 정지 or 감속 or 회전 등 처리
                     self.pid.clear()
-                    if (
-                        not self.stop
-                        and not self.doing_turn_right
-                        and not self.start_park
-                    ):
-                        twist.linear.x = self.slow_down_speed
-                        twist.angular.z = 0.1
-                        self.mecanum_pub.publish(twist)
-                        time.sleep(0.3)
+                    # if (
+                    #     not self.stop
+                    #     and not self.doing_turn_right
+                    #     and not self.start_park
+                    # ):
+                    #     twist.linear.x = self.slow_down_speed
+                    #     twist.angular.z = 0.1
+                    #     self.mecanum_pub.publish(twist)
+                    #     time.sleep(0.3)
 
                 if self.objects_info:
                     for i in self.objects_info:
