@@ -140,6 +140,9 @@ class SelfDrivingNode(Node):
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
+        self.turn_count_start_box1 = (
+            -1
+        )  # TODO : 회전 카운트 시작 시점 박스1 값 (드리프트 감지용) → 추가
         self.count_turn_exit = 0  # TODO : 회전 종료 판단용 카운트 → 추가
         self.start_turn = False  # start to turn
 
@@ -470,8 +473,18 @@ class SelfDrivingNode(Node):
                         != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
                         and center_x[3] == -1
                         and center_x[4] == -1
-                    ):  # TODO : 횡단보도 게이트(crosswalk_raw_last_seen_time) 제거 - 일부 코너는 횡단보도가 바로 근처에 있어 계속 인식되는 바람에 게이트가 영영 안 풀려서 회전 자체가 막혔음. 박스1 생존 조건으로 차선 소실 오발동은 이미 방지되므로 게이트 불필요
-                        self.count_turn += 1
+                    ):
+                        if self.count_turn == 0:
+                            self.turn_count_start_box1 = center_x[
+                                0
+                            ]  # TODO : 카운트 시작 시점의 박스1 값 기록 (드리프트 감지용) → 추가
+                        if (
+                            abs(center_x[0] - self.turn_count_start_box1) > 30
+                        ):  # TODO : 박스1이 카운트 시작 이후 30픽셀 넘게 움직이면 드리프트 중으로 보고 리셋 - 실제 로그로 검증: 가짜 신호는 47.5px 드리프트, 진짜 코너는 20px 이내로 안정적 (시간 기준 게이트로는 둘이 너무 가까운 타이밍이라 구분 불가) → 추가
+                            self.count_turn = 1
+                            self.turn_count_start_box1 = center_x[0]
+                        else:
+                            self.count_turn += 1
                         if (
                             self.count_turn > 4
                             and not self.start_turn  # TODO : 3->4, 속도 0.5->0.4로 낮춘 만큼 기준도 같이 재조정 (0.3 기준 6, 0.5 기준 3에 맞춰 0.4는 중간값 4)
