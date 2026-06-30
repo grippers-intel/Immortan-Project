@@ -314,7 +314,10 @@ class SelfDrivingNode(Node):
                             )
                             self.crosswalk_stopping = False
                             self.stop = False
-                            time.sleep(0.1)
+                            # TODO : Green Light 기능
+                            twist.linear.x = self.slow_down_speed
+                            self.mecanum_pub.publish(twist)
+                            time.sleep(0.5)
                         else:
                             self.stop = True  # 정지 유지
                             self.mecanum_pub.publish(Twist())
