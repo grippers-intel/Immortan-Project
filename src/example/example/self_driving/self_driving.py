@@ -202,6 +202,10 @@ class SelfDrivingNode(Node):
         #   red_hold_time 후 is_red=False → 출발(초록을 직접 검출하지 않아도 됨). 빨강은 잘 잡히는 전제.
         self.red_last_seen_time = 0
         self.red_hold_time = 1.5   # 빨강 마지막 검출 후 이 시간(초)까지 빨강으로 유지. 너무 빨리 출발하면 ↑
+        # [신호등 정지 트리거] 규칙: 신호등 인식하면 우선 멈춤. 횡단보도 검출이 끊겨도 '가까운 빨강'을
+        #   보면 정지하도록 별도 트리거. '가까운' 판단은 박스 면적(멀리 있는 빨강엔 길 한복판서 안 멈추게).
+        self.red_close_time = 0    # 가까운 빨강 마지막 검출 시각
+        self.red_min_area = 800    # 빨강 박스가 이 면적 이상이면 '가까운 빨강'으로 보고 정지 트리거 (로그 보고 튜닝)
 
         self.object_sub = None
         self.image_sub = None
@@ -407,14 +411,17 @@ class SelfDrivingNode(Node):
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
-                if self.crosswalk_distance > self.crosswalk_stop_dist and not self.crosswalk_passed:
+                # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
+                # [수정] '빨강 신선도' 방식: 빨강이 최근에 보였는지로 판단(초록 미검출 의존 제거).
+                is_red = (time.time() - self.red_last_seen_time) < self.red_hold_time          # 모든 빨강 → 출발 막기(안전)
+                red_close = (time.time() - self.red_close_time) < self.red_hold_time           # 가까운 빨강 → 정지 트리거
+                # [수정] 정지 트리거: 횡단보도가 가깝거나(거리) OR 가까운 빨강을 봤을 때(규칙: 신호 인식시 우선 정지).
+                #   횡단보도 검출이 끊겨도 빨강이면 멈추게 함.
+                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close) and not self.crosswalk_passed:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
                         self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
-                    # 신호등이 빨강이면 계속 정지, 빨강이 아니면(초록/없음) 정해진 시간 정지 후 통과 허용
-                    # [수정] '빨강 신선도' 방식: 빨강이 최근에 보였는지로 판단(초록 미검출 의존 제거).
-                    is_red = (time.time() - self.red_last_seen_time) < self.red_hold_time
                     stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
                     if stopped_enough and not is_red:
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
@@ -614,7 +621,11 @@ class SelfDrivingNode(Node):
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                     if class_name == 'red':
-                        self.red_last_seen_time = time.time()  # [신호등] 빨강 신선도 갱신
+                        self.red_last_seen_time = time.time()  # [신호등] 빨강 신선도 갱신(모든 빨강 → 출발 막기)
+                        red_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
+                        self.get_logger().info('\033[1;31mred area=%d (min=%d)\033[0m' % (red_area, self.red_min_area))
+                        if red_area >= self.red_min_area:        # 가까운 빨강 → 정지 트리거 갱신
+                            self.red_close_time = time.time()
                
 
             self.get_logger().info('\033[1;32m%s\033[0m' % class_name)
