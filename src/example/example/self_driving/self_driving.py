@@ -177,12 +177,12 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = (
             False  # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         )
-        self.turn_right_speed = 0.05  # 우회전 시 전진 속도
+        self.turn_right_speed = 0.1  # 우회전 시 전진 속도
         self.turn_right_angular = (
-            -0.8
+            -0.7
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         self.turn_right_duration = (
-            2.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            1.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
         self.have_turn_right = False
 
@@ -196,7 +196,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_distance = 0  # distance to the zebra crossing
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발
-        self.crosswalk_stop_dist = 150  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_dist = 200  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         self.crosswalk_stop_duration = 1.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
@@ -244,7 +244,7 @@ class SelfDrivingNode(Node):
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())  # 정지
         self.doing_turn_right = False  # 차선추종 재개
-        self.have_turn_right = True
+        # self.have_turn_right = True
 
     def main(self):
         while self.is_running:
@@ -287,8 +287,6 @@ class SelfDrivingNode(Node):
                     self.turn_right = False
                     self.doing_turn_right = True
                     self.turn_right_action()
-                    twist.linear.x = self.normal_speed
-                    self.mecanum_pub.publish(twist)
 
                 # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
                 else:
@@ -398,11 +396,14 @@ class SelfDrivingNode(Node):
                                         self.angular_z_limit,
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
                     self.mecanum_pub.publish(twist)
-                elif self.have_turn_right:
-                    twist.linear.x = self.normal_speed
-                    self.mecanum_pub.publish(twist)
-                    time.sleep(6)
-                    threading.Thread(target=self.park_action, daemon=True).start()
+
+                # TODO : 우회전 직후 수행할 기능 (차선 정렬 및 오른쪽 라인 detect)
+                # elif self.have_turn_right:
+                # twist.linear.x = self.normal_speed
+                # self.mecanum_pub.publish(twist)
+                # time.sleep(6)
+                # threading.Thread(target=self.park_action, daemon=True).start()
+                # self.have_turn_right = False
 
                 else:
                     # TODO - 차선 인식 실패 시 정지 or 감속 or 회전 등 처리
