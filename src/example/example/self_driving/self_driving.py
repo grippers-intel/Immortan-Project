@@ -142,6 +142,9 @@ class SelfDrivingNode(Node):
         self.count_turn = 0
         self.count_turn_exit = 0  # TODO : 회전 종료 판단용 카운트 → 추가
         self.start_turn = False  # start to turn
+        self.last_angular_z = (
+            0.0  # TODO : 회전<->직진 전환 시 급격한 z축 점프 완화용 → 추가
+        )
 
         self.count_right = 0
         self.count_right_miss = 0
@@ -466,13 +469,12 @@ class SelfDrivingNode(Node):
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5
-                        and 0
-                        < center_x[0]
-                        < 280  # TODO : 박스1이 살아있을 뿐 아니라 정상 범위(끝쪽으로 치우치지 않음)여야 함 - 실패한 회전들은 트리거 직전 박스1,2가 297~308까지 치우쳐 있었음 (진짜 코너 vs 이미 드리프트된 상태 구분)
+                        and center_x[0]
+                        != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
                         and center_x[3] == -1
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_raw_last_seen_time
-                        > 1.0  # TODO : crosswalk_distance 대신 raw 감지 시간 사용 - 차선인식 자체가 줄무늬에 혼동되는 문제라 YOLO가 crosswalk를 본 시점 기준으로 막아야 함
+                        > 0.5  # TODO : 1.0->0.5초 - 게이트가 너무 길어서 코너 진입 신호가 쌓일 시간(5프레임)이 부족했음, 횡단보도 잔여 인식이 코너 직전까지 이어지는 구간에서 특히 문제
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
@@ -523,6 +525,14 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
+                    # TODO : 회전<->직진 전환 시 angular.z가 한 프레임에 급격히 점프하는 것 완화 (slew rate limit) → 추가
+                    max_delta = 0.15
+                    delta = twist.angular.z - self.last_angular_z
+                    if delta > max_delta:
+                        twist.angular.z = self.last_angular_z + max_delta
+                    elif delta < -max_delta:
+                        twist.angular.z = self.last_angular_z - max_delta
+                    self.last_angular_z = twist.angular.z
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
