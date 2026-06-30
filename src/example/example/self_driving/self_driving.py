@@ -142,9 +142,6 @@ class SelfDrivingNode(Node):
         self.count_turn = 0
         self.count_turn_exit = 0  # TODO : 회전 종료 판단용 카운트 → 추가
         self.start_turn = False  # start to turn
-        self.last_angular_z = (
-            0.0  # TODO : 회전<->직진 전환 시 급격한 z축 점프 완화용 → 추가
-        )
 
         self.count_right = 0
         self.count_right_miss = 0
@@ -503,7 +500,7 @@ class SelfDrivingNode(Node):
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 245  # TODO 도로 중앙값 조절 (225->245, 카메라 재설정 후 다시 우측 편향 발생)
+                            self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230, 차량이 조금 더 오른쪽으로 가도록 미세 조정)
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
@@ -525,14 +522,6 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    # TODO : 회전<->직진 전환 시 angular.z가 한 프레임에 급격히 점프하는 것 완화 (slew rate limit) → 추가
-                    max_delta = 0.15
-                    delta = twist.angular.z - self.last_angular_z
-                    if delta > max_delta:
-                        twist.angular.z = self.last_angular_z + max_delta
-                    elif delta < -max_delta:
-                        twist.angular.z = self.last_angular_z - max_delta
-                    self.last_angular_z = twist.angular.z
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
