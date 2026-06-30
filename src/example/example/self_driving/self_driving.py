@@ -498,7 +498,7 @@ class SelfDrivingNode(Node):
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 225  # TODO 도로 중앙값 조절 (210->225, 아직 약간 우측 편향)
+                            self.pid.SetPoint = 245  # TODO 도로 중앙값 조절 (225->245, 카메라 재설정 후 다시 우측 편향 발생)
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
