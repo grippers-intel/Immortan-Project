@@ -540,8 +540,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 6.0
-                    ):  # TODO 01 : 4->6초, 차선 못찾아도 안전장치로 강제 탈출
+                        turn_elapsed > 3.5
+                    ):  # TODO : 6->3.5초, 지금 회전속도(-0.64rad/s)로 6초면 약 220도 과회전 - 정상 회전이 보통 2.4~3.0초인데 6초까지 기다리면 코너를 훨씬 지나쳐서 복구 불가능해짐
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
