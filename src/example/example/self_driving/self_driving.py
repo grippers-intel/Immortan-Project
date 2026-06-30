@@ -115,8 +115,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.226,
-                "angular_z": -0.53,  # TODO : 메카넘 변환 시 왼쪽 바퀴(motor1,2) 속도가 직진(0.3)과 같아지도록 역산 - 왼쪽은 직진처럼 유지, 오른쪽 바퀴만 느려져서 회전 발생
+                "linear_x": 0.27,
+                "angular_z": -0.64,  # TODO : 0.226/-0.53 -> 0.27/-0.64 (반지름 동일 유지, 비율 1.2배 증가 - 왼쪽 바퀴 속도 0.3->0.36 직진보다 빠르게)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -602,8 +602,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        35 < box_height < 180 and 80 < box_width
-                    ):  # TODO 00 : 높이 하한 50->35 (더 멀리서/일찍 감지), 가짜 오인식은 높이 4~9라 35로도 충분히 걸러짐
+                        15 < box_height < 180 and 80 < box_width
+                    ):  # TODO : 높이 하한 35->15 (정지 트리거가 항상 거리 330~439에서 발동되어 멈춤 위치 들쭉날쭉 + 라인 밟는 경우 발생 - 더 멀리서부터 추적 시작해서 여유 공간 확보, 가짜 오인식 노이즈는 높이 4~9라 15도 안전)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
