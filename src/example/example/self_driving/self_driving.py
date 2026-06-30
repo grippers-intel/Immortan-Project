@@ -458,8 +458,8 @@ class SelfDrivingNode(Node):
 
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
-                        len(center_x) >= 5 and center_x[3] == -1 and center_x[4] == -1
-                    ):  # TODO 01 : 박스4,5(먼쪽) 둘다 -1일때 우회전 감지 (실측: 코너에서 박스1,2,3은 보이고 4,5만 사라짐)
+                        len(center_x) >= 5 and center_x[4] == -1
+                    ):  # TODO 01 : 박스5(제일 먼쪽)만 체크 (실측: 박스5가 박스4보다 훨씬 안정적으로 -1 유지)
                         self.count_turn += 1
                         if (
                             self.count_turn > 5 and not self.start_turn
@@ -489,7 +489,7 @@ class SelfDrivingNode(Node):
                         self.count_turn = 0
 
                         if not self.start_turn:
-                            self.pid.SetPoint = 185  # TODO 도로 중앙값 조절 (카메라 각도 바뀌어서 재조정 필요)
+                            self.pid.SetPoint = 210  # TODO 도로 중앙값 조절 (185->210, 우측 편향 보정 - 카메라 각도 변경 반영)
                             if (
                                 lane_x is not None and lane_x > 0
                             ):  # 차선 보일 때만 PID 적용
@@ -626,3 +626,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ㅁ
