@@ -115,8 +115,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.15,
-                "angular_z": -0.4,  # TODO : -0.2->-0.4 (회전 반경 1m->0.375m, 도로폭 45cm에 맞게 더 날카롭게)
+                "linear_x": 0.226,
+                "angular_z": -0.53,  # TODO : 메카넘 변환 시 왼쪽 바퀴(motor1,2) 속도가 직진(0.3)과 같아지도록 역산 - 왼쪽은 직진처럼 유지, 오른쪽 바퀴만 느려져서 회전 발생
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
