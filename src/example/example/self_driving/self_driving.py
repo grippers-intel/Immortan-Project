@@ -526,7 +526,7 @@ class SelfDrivingNode(Node):
         self.turn_right_angular = (
             -0.5
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
-        self.turn_right_forward_time = 1.5
+        self.turn_right_forward_time = 1.0
         self.turn_right_duration = (
             2.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
@@ -566,7 +566,7 @@ class SelfDrivingNode(Node):
         #   코너를 너무 빨리/일찍 도는 증상 → ↑ (진입 늦춤). lane_setpoint(130)보다 충분히 커야 함.
         #   캘리브레이션 개선 후 150→180→200 으로 단계적 상향.
         #   ※ 아래 main()의 lane_x 로그로 직선/코너 실제값을 보고 정밀 조정할 것.
-        self.turn_threshold = 200
+        self.turn_threshold = 185
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   [복원] 실차 결과 초기값이 더 안정적이라 -0.38 → -0.45(원래)로 되돌림.
