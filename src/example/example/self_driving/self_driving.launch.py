@@ -47,7 +47,11 @@ def launch_setup(context):
             "camera_info_topic": "/camera/camera_info",
             "camera_info_file": f"{package_share_directory}/config/camera_info.yaml",
             # "show_result": True,
-            "pub_result_img": True}]
+            # [수정] pub_result_img를 끔(True→False). YOLO가 매 추론마다 결과이미지를 그려
+            #   발행하느라 추론 FPS가 떨어져, 주행 중 신호등을 잡는 프레임이 줄던 문제 해결.
+            #   박스 시각화는 self_driving이 /self_driving/image_result에 이미 그려주므로 디버깅엔 지장 없음.
+            #   (다시 보고 싶으면 True로)
+            "pub_result_img": False}]
     )
 
     self_driving_node = Node(
