@@ -465,7 +465,11 @@ class SelfDrivingNode(Node):
                         len(center_x) >= 5
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and not self.crosswalk_ignore  # TODO : 횡단보도 통과 직후(3.5초)는 차선인식 불안정 → 회전감지 보류
+                        and (
+                            not self.crosswalk_ignore
+                            or time.time() - self.crosswalk_ignore_time
+                            > 1.5  # TODO : 3.5초->1.5초, 너무 길어서 진짜 코너까지 막던 문제 수정
+                        )
                     ):  # TODO : 박스5 단독 조건이 직선 구간에서도 오발동 → 박스4,5 둘 다 -1로 복귀 (실측 코너 신호)
                         self.count_turn += 1
                         if (
@@ -618,6 +622,9 @@ class SelfDrivingNode(Node):
                     box_area = abs(i.box[0] - i.box[2]) * abs(
                         i.box[1] - i.box[3]
                     )  # TODO 00 : 박스 크기 계산
+                    self.get_logger().info(
+                        f"[park raw] box_area: {box_area}"
+                    )  # TODO : park 오인식 추적용 → 추가
                     if box_area > 1000:  # TODO 00 : 오인식 방지
                         self.park_x = center[0]
                 elif (
@@ -649,5 +656,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-##
