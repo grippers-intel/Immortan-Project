@@ -109,7 +109,7 @@ class SelfDrivingNode(Node):
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
-                "linear_x": 0.4,  # TODO : 0.5->0.4, 0.5는 한번에 너무 크게 올려서(67%) 인식 불안정/차선 소실 발생 - 좀 더 점진적으로
+                "linear_x": 0.5,
                 "angular_z": 0.0,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
@@ -170,7 +170,8 @@ class SelfDrivingNode(Node):
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.1  # normal driving speed
-        self.slow_down_speed = 0.1  # slowing down speed
+        self.slow_down_speed = 0.05  # slowing down speed
+        self.pre_slow_down = False  # count=1 감지 시 pre-decel 플래그
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -356,17 +357,21 @@ class SelfDrivingNode(Node):
                     and not self.crosswalk_ignore
                 ):  # TODO 00 : ignore 조건 추가, 거리기준 100->60 (더 일찍 정지)
                     self.count_crosswalk += 1
+                    if self.count_crosswalk == 1:  # 첫 감지: pre-decel 시작
+                        self.pre_slow_down = True
                     if (
                         self.count_crosswalk == 2
-                    ):  # judge multiple times to prevent false detection, 3->2 (더 빨리 반응)
+                    ):  # judge multiple times to prevent false detection
                         self.count_crosswalk = 0
                         self.start_slow_down = True  # sign for slowing down
+                        self.pre_slow_down = False  # full stop으로 전환, pre-decel 해제
                         self.count_slow_down = (
                             time.time()
                         )  # fixing time for slowing down
                 else:
                     if not self.start_slow_down:
                         self.count_crosswalk = 0
+                        self.pre_slow_down = False  # 횡단보도 사라지면 pre-decel 해제
 
                 # deceleration processing
                 # TODO 00 : 교차로 인식 시 일단 정지
@@ -401,6 +406,7 @@ class SelfDrivingNode(Node):
                             self.crosswalk_ignore_time = (
                                 time.time()
                             )  # TODO 00 : 무시 시작 시간 → 추가
+                            self.pre_slow_down = False
 
                     else:
                         # 신호등 없으면 1초 후 출발
@@ -425,6 +431,7 @@ class SelfDrivingNode(Node):
                                 self.crosswalk_ignore_time = (
                                     time.time()
                                 )  # TODO 00 : 무시 시작 시간 → 추가
+                                self.pre_slow_down = False
 
                     if not self.stop:
                         self.set_drive_mode("slow_down")  # TODO 01
@@ -554,6 +561,10 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
+                    if self.pre_slow_down and not self.start_turn:
+                        twist.linear.x = (
+                            self.slow_down_speed
+                        )  # 0.05: count=1 감지 후 pre-decel
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
