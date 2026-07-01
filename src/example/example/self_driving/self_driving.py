@@ -364,8 +364,8 @@ class SelfDrivingNode(Node):
                         True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
                     )
                     if (
-                        self.crosswalk_box_height > 40
-                    ):  # TODO : 20→40, 관성 고려해서 가까이 가서 멈추도록 → 수정
+                        self.crosswalk_box_height > 30
+                    ):  # TODO : 20→30, 이동 중 24px가 최대라 40은 미도달, 감속 후 30은 도달 가능 + 2차 오정지(29px) 차단 → 수정
                         self.count_crosswalk += 1
                         if self.count_crosswalk >= 2:
                             self.count_crosswalk = 0
@@ -567,7 +567,10 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    # TODO : pre_slow_down 속도 제한 제거 - 0.5m/s 그대로 달리다 box_height>40에서 바로 정지 → 수정
+                    if self.pre_slow_down and not self.start_turn:
+                        twist.linear.x = (
+                            self.slow_down_speed
+                        )  # 0.05: 횡단보도 접근 감속 (복원)
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
