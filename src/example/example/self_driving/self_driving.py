@@ -474,6 +474,14 @@ class SelfDrivingNode(Node):
 
     def main(self):
         while self.is_running:
+            led.mode_straight()
+            time.sleep(2)
+            led.mode_stop()
+            time.sleep(2)
+            led.mode_turn_right()
+            time.sleep(2)
+            led.mode_park_done()
+            time.sleep(2)
             time_start = time.time()
             try:
                 image = self.image_queue.get(block=True, timeout=1)
