@@ -455,7 +455,9 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                         self.park_x, self.park_area, self.park_min_area))
-                if 0 < self.park_x and self.park_area > self.park_min_area:
+                if self.going_to_park and 0 < self.park_x and self.park_area > self.park_min_area:
+                    # [수정] going_to_park(우회전 이후)일 때만 주차. 출발 지점에서 park 표지판이 보여도
+                    #   주차/접근 모드에 안 들어가게(다른 팀이 신호등을 치워 출발선에서 park가 보이던 문제).
                     # 표지판에 충분히 가까움 → 감속하며 주차 준비
                     twist.linear.x = self.slow_down_speed
                     if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
@@ -483,8 +485,9 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if not self.start_park and (self.going_to_park or self.park_x > 0) and not self.stop:
-                    # [추가] 우회전 후(going_to_park) 또는 주차 표지판이 보일 때(park_x>0)는 '우측 라인'을 PID로 추종.
+                if not self.start_park and self.going_to_park and not self.stop:
+                    # [수정] '우회전 이후(going_to_park)'에만 우측 라인 접근 모드. (park_x>0 조건 제거 —
+                    #   출발선에서 park 표지판이 보이면 오작동하던 문제). '우측 라인'을 PID로 추종.
                     #   [중요] not self.start_park 가드: 주차 동작 시작 후엔 main 루프가 cmd_vel을 발행하면
                     #   park_action 스레드의 횡이동을 덮어써서 주차가 안 됨(직진해 표지판 지나침). 그래서 양보.
                     #   좌측엔 중앙 교차로 갈림길이 있어 기존(좌측) 차선추종은 좌측 길로 이탈했음.
@@ -535,9 +538,9 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == 'MentorPi_Acker':
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    # [추가] 코너 회전 중 + 복귀(start_turn) 동안 감속 — 코너 직후 갑자기 나타나는
-                    #   횡단보도를 제때 멈추기 위함. 직선에선 normal_speed 그대로.
-                    if self.start_turn or lane_x > self.turn_threshold:
+                    # [수정] 회전 '직후 복귀' 구간에서만 감속(코너 직후 갑툭튀 횡단보도 대비).
+                    #   실제 급회전 중(lane_x>threshold)엔 감속 안 함 — 감속하면 반경이 좁아져 과회전/불안정.
+                    if self.start_turn and lane_x <= self.turn_threshold:
                         twist.linear.x = self.corner_speed
                     self.mecanum_pub.publish(twist)
                 else:
