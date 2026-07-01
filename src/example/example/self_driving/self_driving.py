@@ -457,7 +457,7 @@ class SelfDrivingNode(Node):
                         self.count_park += 1
                         # [진단 로그] 카운트 진행상황 확인 → 8에 도달하는지 보기
                         self.get_logger().info('\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m' % (self.count_park, self.park_area))
-                        if self.count_park >= 8:  # 8프레임 이상 가까우면 주차 시작
+                        if self.count_park >= 5:  # 8=>5프레임 이상 가까우면 주차 시작
                             self.get_logger().info('\033[1;41m=== PARK START ===\033[0m')
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
