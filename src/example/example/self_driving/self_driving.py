@@ -358,6 +358,7 @@ class SelfDrivingNode(Node):
                     60 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
+                    and not self.start_turn  # 우회전 중 횡단보도 감지로 인한 회전 중단 방지
                 ):
                     self.pre_slow_down = (
                         True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
@@ -661,8 +662,10 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        10 < box_height < 180 and 150 < box_width
-                    ):  # height 15->10: 먼 거리 감지용 (노이즈 4~9, 실제 원거리 11~14), width 80->150: height 낮춘 보상으로 폭 필터 강화
+                        10 < box_height < 180
+                        and 150 < box_width
+                        and box_width > 2 * box_height
+                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단, width>2*height: 정사각형 오인식 차단 (실제 횡단보도는 가로>>세로)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
