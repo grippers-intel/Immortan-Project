@@ -178,6 +178,9 @@ class SelfDrivingNode(Node):
                                             #    더 가까이(320)서 멈춤. 지나치면 ↓, 여전히 이르면 ↑)
         self.crosswalk_min_area = 1800      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
                                             #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
+        self.crosswalk_min_aspect = 2.0     # [종횡비 필터] 박스 가로/세로 비가 이 값 이상일 때만 인정.
+                                            #   실제 횡단보도는 가로로 긴 줄무늬(가로≫세로)라 통과하고, 바닥 까진 자국은
+                                            #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2 # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
@@ -682,10 +685,18 @@ class SelfDrivingNode(Node):
                 
                 if class_name == 'crosswalk':
                     # [수정] 바닥 허연 자국을 횡단보도로 오검출(한프레임씩)하는 것 방지.
-                    #   박스 면적이 crosswalk_min_area 이상인 '충분히 큰' 검출만 인정.
-                    cw_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
-                    self.get_logger().info('\033[1;36mcrosswalk area=%d (min=%d)\033[0m' % (cw_area, self.crosswalk_min_area))
-                    if cw_area >= self.crosswalk_min_area and center[1] > min_distance:  # Obtain recent y-axis pixel coordinate of the crosswalk
+                    #   ① 면적 게이트: crosswalk_min_area 이상인 '충분히 큰' 검출만.
+                    #   ② [종횡비 필터] 가로 > 세로 * crosswalk_min_aspect 인 '납작한 줄무늬'만 인정.
+                    #      실제 횡단보도는 가로로 길고, 바닥 자국은 정사각형/덩어리라 종횡비에서 걸러짐.
+                    box_w = i.box[2] - i.box[0]
+                    box_h = i.box[3] - i.box[1]
+                    cw_area = box_w * box_h
+                    aspect = (box_w / box_h) if box_h > 0 else 0
+                    self.get_logger().info('\033[1;36mcrosswalk area=%d aspect=%.1f (min_area=%d min_asp=%.1f)\033[0m' % (
+                        cw_area, aspect, self.crosswalk_min_area, self.crosswalk_min_aspect))
+                    if (cw_area >= self.crosswalk_min_area
+                            and box_w > self.crosswalk_min_aspect * box_h  # 종횡비: 가로가 세로의 N배 이상
+                            and center[1] > min_distance):  # Obtain recent y-axis pixel coordinate of the crosswalk
                         min_distance = center[1]
                 elif class_name == 'go':  # [LED] 직진 화살표 표지판 → 노란 LED 점멸 트리거
                     self.count_go += 1
