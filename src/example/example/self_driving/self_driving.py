@@ -334,6 +334,10 @@ class SelfDrivingNode(Node):
         self.mecanum_pub.publish(Twist())
         self.parked = True  # 주차 완료 → main 루프가 이후 계속 정지 유지
 
+        #TODO: 
+        led.mode_park_done() 
+        self.shutdown() # 주차 완료 후 LED 점멸 모드. park_action에서 이미 호출하지만 혹시 못 탄 경우 대비
+
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
         # 1단계: 회전 없이 똑바로 직진 — 교차로 안쪽까지 더 들어간 뒤 돌게 함(일찍 꺾임 방지)
@@ -341,6 +345,8 @@ class SelfDrivingNode(Node):
         twist.linear.x = self.turn_right_speed
         twist.angular.z = 0.0
         self.mecanum_pub.publish(twist)
+        #TODO:
+        led.mode_turn_right()
         time.sleep(self.turn_right_forward_time)
         # 2단계: 전진하며 우회전
         twist.angular.z = self.turn_right_angular
@@ -465,6 +471,10 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
                         self.crosswalk_stopping = False
                         self.stop = False
+                        #TODO:
+                        led.mode_straight()  # [LED] 정지 해제 → 초록
+
+
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
                         #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
                         #   재무장돼 주차 중에 두 번째 우회전이 실행되어 주차를 망치던 버그 방지.
@@ -475,6 +485,8 @@ class SelfDrivingNode(Node):
                     elif not self.start_park:          # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
                         self.stop = True               # 정지 유지
                         self.mecanum_pub.publish(Twist())
+                        #TODO:
+                        led.mode_stop()  # [LED] 정지 → 빨강
                 else:
                     # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
                     if self.crosswalk_distance < 70:
@@ -570,7 +582,13 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == 'MentorPi_Acker':
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    self.mecanum_pub.publish(twist)  
+                    self.mecanum_pub.publish(twist) 
+                    if -0.05<twist.angular.z<0.05:
+                        led.mode_straight()
+                        #
+                    else:
+                        led.mode_turn_right()
+
                 else:
                     self.pid.clear()
 
