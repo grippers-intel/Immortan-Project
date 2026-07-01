@@ -115,8 +115,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.31,
-                "angular_z": -0.74,  # TODO : 0.27/-0.64 -> 0.31/-0.74 (반지름 동일 유지, 비율 1.15배 증가 - 회전에 걸리는 시간 단축, 박스4 재인식까지 평균 2.3~2.6초 걸리던 것 줄이기)
+                "linear_x": 0.30,
+                "angular_z": -0.713,  # TODO : 0.31/-0.74 -> 0.30/-0.713 (직진속도 0.4로 증가에 맞춰 왼쪽 바퀴 속도를 0.36->0.4로 재조정, 반지름 0.422m는 동일 유지)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -144,6 +144,9 @@ class SelfDrivingNode(Node):
             -1
         )  # TODO : 회전 카운트 시작 시점 박스1 값 (드리프트 감지용) → 추가
         self.count_turn_exit = 0  # TODO : 회전 종료 판단용 카운트 → 추가
+        self.turn_exit_time = (
+            0  # TODO : 회전 종료 시점 (교차로 차선 끊김 대비 강제 직진용) → 추가
+        )
         self.start_turn = False  # start to turn
 
         self.count_right = 0
@@ -462,6 +465,12 @@ class SelfDrivingNode(Node):
                 # 차선이 보일 때만 직진 속도 설정 (차선 없으면 정지 유지)
                 if not self.start_slow_down and lane_x is not None and lane_x > 0:
                     twist.linear.x = self.drive_params["straight"]["linear_x"]
+                elif (
+                    not self.start_slow_down
+                    and not self.start_turn
+                    and time.time() - self.turn_exit_time < 1.5
+                ):  # TODO : 회전 종료 직후 1.5초간은 차선 안 보여도 강제 직진 - 교차로 구간엔 차선이 안 그려져 있어 회전 직후 잠깐 끊기는 게 정상이라 그 구간을 버티고 지나가도록 → 추가
+                    twist.linear.x = self.drive_params["straight"]["linear_x"]
 
                 self.get_logger().info(
                     f"[DEBUG] stop:{self.stop}, start_turn:{self.start_turn}, count_turn:{self.count_turn}, start_slow_down:{self.start_slow_down}"
@@ -473,10 +482,8 @@ class SelfDrivingNode(Node):
                         != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and not (
-                            self.crosswalk_ignore
-                            and time.time() - self.crosswalk_ignore_time < 1.1
-                        )  # TODO : 횡단보도 직후 1.1초간 추가 차단 - 드리프트 없이 안정적이지만 잘못된 값(가짜 코너)이 나오는 경우 발견, 실제 코너는 1.27초 이후부터 나타남 → 추가
+                        and time.time() - self.crosswalk_ignore_time
+                        > 1.8  # TODO : 실측 기반 계산 - 횡단보도1 정지선~횡단보도2 끝까지 약 60cm, 직진속도 0.4m/s 기준 1.5초 + 여유 0.3초 = 1.8초. 비전 신호(마지막으로 본 시점) 대신 거리/속도 기반 고정값으로 변경 - 속도 바뀌면 이 값도 같이 재계산 필요
                     ):
                         if self.count_turn == 0:
                             self.turn_count_start_box1 = center_x[
@@ -532,8 +539,8 @@ class SelfDrivingNode(Node):
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
-                                        self.pid.output, -0.18, 0.18
-                                    )  # TODO : 0.1->0.18 - Kp=0.4라 픽셀 오차 1만 넘어도 항상 클램프에 걸려있던 상태(사실상 최대 회전속도가 전부였음) - 드리프트 발생 시 복구가 너무 느려서(반경 3m) 차선을 통째로 놓치는 일이 반복됨, 클램프를 키워서 복구 속도 확보
+                                        self.pid.output, -0.13, 0.13
+                                    )  # TODO : 0.18->0.13, 직진 전용 클램프 - 속도 0.4로 올리면서 직진 중 좌우 떨림 발생, 우회전은 별도 코드(angular_z=-0.713 직접 명령)라 이 클램프 영향 없음
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
@@ -562,15 +569,21 @@ class SelfDrivingNode(Node):
                             self.start_turn = False
                             self.count_turn = 0
                             self.count_turn_exit = 0
+                            self.turn_exit_time = (
+                                time.time()
+                            )  # TODO : 회전 종료 시점 기록 (교차로 구간 차선 끊김 대비 강제 직진용) → 추가
                     else:
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 3.2
-                    ):  # TODO : 3.5->3.2초 - 자연 종료 실패 시(박스4 영영 안 보임) 3.5초까지 끌면 과회전이 너무 심해서 복구 불가능 - 정상 회전(2.8~3.0초)은 여유있게 두고 실패 시 피해만 줄이기 위해 단축
+                        turn_elapsed > 2.6
+                    ):  # TODO : 3.2->2.6초 - 정상 회전(약 2.2초, 90도 기준)은 여유있게 끝나야 하니 그보다 더 돌면 이미 과회전 가능성 높음. 못 찾으면 더 돌기보다 멈추고 직진(강제 직진 1.5초)으로 전환해서 차선 재탐색
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
+                        self.turn_exit_time = (
+                            time.time()
+                        )  # TODO : 회전 종료 시점 기록 (교차로 구간 차선 끊김 대비 강제 직진용) → 추가
 
                 if self.objects_info:
                     for i in self.objects_info:
