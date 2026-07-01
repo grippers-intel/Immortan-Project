@@ -163,6 +163,8 @@ class SelfDrivingNode(Node):
         self.crosswalk_min_area = 1800      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
                                             #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
+        self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
+        self.crosswalk_approach_speed = 0.2 # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0        # 정지 시작 시각
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
@@ -442,7 +444,11 @@ class SelfDrivingNode(Node):
                 red_close = (time.time() - self.red_close_time) < self.red_hold_time           # 가까운 빨강 → 정지 트리거
                 # [수정] 정지 트리거: 횡단보도가 가깝거나(거리) OR 가까운 빨강을 봤을 때(규칙: 신호 인식시 우선 정지).
                 #   횡단보도 검출이 끊겨도 빨강이면 멈추게 함.
-                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close) and not self.crosswalk_passed:
+                # [수정] 정지 래치(self.crosswalk_stopping): 일단 정지에 들어가면 거리(320) 근처에서
+                #   crosswalk_distance가 요동쳐도(예: 454→316→337) 정지가 풀리지 않게 함. 예전엔 316처럼
+                #   임계값 아래로 잠깐 떨어지면 정지가 한 프레임 풀려 차선추종이 로봇을 앞으로 밀어 '덜컥'거림.
+                #   정지는 stopped_enough(2초) 후 passed=True 될 때만 해제된다.
+                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close or self.crosswalk_stopping) and not self.crosswalk_passed:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
@@ -468,6 +474,16 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = False
                         self.crosswalk_stopping = False
                     self.stop = False
+
+                # [추가] 횡단보도 접근 감속: 검출됐고(거리≥approach_dist) 아직 통과/정지 전이면 미리 감속해
+                #   정지 명령 후 관성 오버슛을 줄인다. 특히 출발 직후 '바로 앞' 횡단보도는 늦게(가까이서)
+                #   검출돼 풀속(0.45)이면 지나치므로 접근 속도를 낮춘다. (정지지점 자체는 crosswalk_stop_dist 그대로)
+                #   [가드] not start_turn: 실제 코너 회전/복귀 중엔 감속 금지(고정 각속도라 감속하면 반경이
+                #   좁아져 과회전·불안정). 코너 직후 갑툭튀 횡단보도는 코너-복귀 감속(아래)이 이미 처리한다.
+                if (self.crosswalk_distance >= self.crosswalk_approach_dist
+                        and not self.crosswalk_passed and not self.crosswalk_stopping
+                        and not self.start_turn):
+                    twist.linear.x = min(twist.linear.x, self.crosswalk_approach_speed)
 
                 # [수정] 주차 표지판 검출 시 처리. 기존엔 crosswalk_distance에만 의존해
                 #   표지판을 멀리서 보기만 해도 주차했음 → 표지판 박스 면적(park_area=거리지표)으로 게이트.
