@@ -43,6 +43,10 @@ class SelfDrivingNode(Node):
         #   error 15px→0.15(부드럽게), error<deadband→직진. 여전히 흔들리면 P 더 ↓ 또는 deadband ↑.
         #   반대로 완만한 굽이에서 못 따라가면 P 다시 ↑.
         self.pid = pid.PID(0.01, 0.0, 0.002)
+        # [② 우회전 후 복귀용 PID] 직진용 self.pid(0.01)는 휘청 방지로 아주 약함 → 회전 직후 우측라인으로
+        #   당겨오는 힘이 부족. going_to_park 우측라인 추종은 더 단단한 전용 게인을 씀(파고듦 빠르게 복구).
+        #   여전히 파고들면 P ↑, 우측라인 넘어 반대로 튀면 P ↓.
+        self.pid_park = pid.PID(0.02, 0.0, 0.003)
         self.param_init()
 
         self.fps = fps.FPS()  
@@ -125,6 +129,7 @@ class SelfDrivingNode(Node):
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
+        self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -147,8 +152,14 @@ class SelfDrivingNode(Node):
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         self.turn_right_forward_time = 1.1  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
                                             #   (0.8→1.1: 조금 일찍 돌아 안쪽 라인 밟던 것 → 더 들어간 뒤 회전)
-        self.turn_right_duration = 3.5   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
-                                         #   (3.0→3.2→3.5: 계속 90도에 모자라 회전량 더 증가)
+        self.turn_right_duration = 3.3   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+                                         #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
+                                         #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
+        # [③ 시작점 정규화] 우회전은 개방루프라 정지 위치가 매번 달라지면 도착 라인도 달라짐.
+        #   최소 직진(turn_right_forward_time) 후, 횡단보도가 완전히 지나갈 때까지(거리<pass_dist) 추가 전진 →
+        #   항상 '횡단보도를 막 지난 지점'에서 회전 시작 → 시작점 일정. (검출 실패 대비 타임아웃 있음)
+        self.turn_right_pass_dist = 150   # crosswalk_distance가 이 값 미만이면 '횡단보도 지나감'으로 판단
+        self.turn_right_forward_max = 2.6 # 정규화 전진 최대 시간(초, 타임아웃). 횡단보도 검출 실패해도 여기서 회전
 
         self.last_park_detect = False
         self.count_park = 0  
@@ -360,12 +371,30 @@ class SelfDrivingNode(Node):
         twist = Twist()
         twist.linear.x = self.turn_right_speed
         twist.angular.z = 0.0
-        self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_forward_time)
+        # 1-a) 최소 직진(기존 동작 보장): 오검출로 너무 일찍 회전하는 것 방지.
+        t0 = time.time()
+        while time.time() - t0 < self.turn_right_forward_time:
+            self.mecanum_pub.publish(twist)
+            time.sleep(0.03)
+        # 1-b) [③ 시작점 정규화] 횡단보도가 완전히 지나갈 때까지(거리<pass_dist, 3프레임 연속) 추가 전진.
+        #   정지 위치가 매번 달라도 '횡단보도를 막 지난 지점'에서 회전이 시작됨 → 시작점 일정.
+        #   검출이 안 끊기거나 실패해도 turn_right_forward_max 타임아웃으로 반드시 회전으로 넘어감.
+        gone = 0
+        while time.time() - t0 < self.turn_right_forward_max:
+            self.mecanum_pub.publish(twist)
+            if self.crosswalk_distance < self.turn_right_pass_dist:
+                gone += 1
+                if gone >= 3:
+                    break
+            else:
+                gone = 0
+            time.sleep(0.03)
+        self.get_logger().info('\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m' % (
+            time.time() - t0, self.crosswalk_distance))
         # 2단계: 전진하며 우회전
         twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝
+        time.sleep(self.turn_right_duration)       # 90도 맞춰 튜닝(② 살짝 덜 돌림)
         self.mecanum_pub.publish(Twist())          # 정지
         self.doing_turn_right = False              # 차선추종 재개
         self.going_to_park = True                  # 이후 주차장까지는 직진만(좌측 라인 이탈 방지)
@@ -549,11 +578,13 @@ class SelfDrivingNode(Node):
                     # 주차 표지판이 보이면(park_x>0) 감속해 정밀 접근(지나침 방지). 아직 안 보이면 복도를 순항속도로.
                     twist.linear.x = self.slow_down_speed if self.park_x > 0 else self.normal_speed
                     if right_x >= 0:
-                        self.pid.SetPoint = self.park_lane_setpoint
-                        self.pid.update(right_x)
-                        twist.angular.z = common.set_range(self.pid.output, -self.angular_z_limit, self.angular_z_limit)
+                        # [②] 전용 PID(pid_park)로 우측라인 추종 — 회전 직후 파고듦을 단단히 복구.
+                        #   클램프도 park_angular_limit(0.4)로 넓혀 회복 각속도 확보(직진용 0.25보다 큼).
+                        self.pid_park.SetPoint = self.park_lane_setpoint
+                        self.pid_park.update(right_x)
+                        twist.angular.z = common.set_range(self.pid_park.output, -self.park_angular_limit, self.park_angular_limit)
                     else:
-                        self.pid.clear()
+                        self.pid_park.clear()
                         twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
                     self.mecanum_pub.publish(twist)
                 elif not self.start_park and lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전/주차 동작 중엔 차선추종 양보
