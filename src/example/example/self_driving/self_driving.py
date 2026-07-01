@@ -116,7 +116,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.30,
-                "angular_z": -0.713,  # TODO : 0.31/-0.74 -> 0.30/-0.713 (직진속도 0.4로 증가에 맞춰 왼쪽 바퀴 속도를 0.36->0.4로 재조정, 반지름 0.422m는 동일 유지)
+                "angular_z": -0.55,  # TODO : -0.713 -> -0.55 (count_turn>4 복원에 맞춰 회전량 줄임, 우회전 후 오른쪽 치우침 개선)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -510,8 +510,8 @@ class SelfDrivingNode(Node):
                         else:
                             self.count_turn += 1
                         if (
-                            self.count_turn > 7
-                            and not self.start_turn  # TODO : 4->7, 0.5m/s 기준 3프레임 추가 ≈ 10cm 더 진입 후 회전 (우회전 후 오른쪽 치우침 개선)
+                            self.count_turn > 4
+                            and not self.start_turn  # TODO : 7->4 복원, angular_z 감소로 우회전 후 위치 보정
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
