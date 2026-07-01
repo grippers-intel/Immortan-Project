@@ -37,7 +37,12 @@ class SelfDrivingNode(Node):
         #   - P(0.4): 차선 중심에서 벗어난 만큼 즉시 조향. 반응이 둔하면 ↑, 좌우로 흔들리면 ↓
         #   - I(0.0): 정상상태 오차 누적 보정. 한쪽으로 치우쳐 달리면 아주 조금만 ↑ (와인드업 주의)
         #   - D(0.05): 흔들림 감쇠(댐핑). 직선에서 좌우 진동이 크면 ↑
-        self.pid = pid.PID(0.4, 0.0, 0.05)
+        # [튜닝] 직진 휘청거림(뱅뱅 진동) 수정: 기존 P=0.4,D=0.05는 출력 클램프(±angular_z_limit=0.25)
+        #   대비 수십 배 커서 오차 1px에도 최대 조향으로 포화 → 좌우로 계속 튕김.
+        #   비례제어가 되도록 대폭 낮춤. error 50px→0.5(클램프 0.25, 실편차엔 여전히 풀조향),
+        #   error 15px→0.15(부드럽게), error<deadband→직진. 여전히 흔들리면 P 더 ↓ 또는 deadband ↑.
+        #   반대로 완만한 굽이에서 못 따라가면 P 다시 ↑.
+        self.pid = pid.PID(0.01, 0.0, 0.002)
         self.param_init()
 
         self.fps = fps.FPS()  
@@ -198,7 +203,8 @@ class SelfDrivingNode(Node):
         # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
         #   조향하지 않고 직진(미세 진동 제거). 0이면 비활성(원래 동작).
         #   [복원] 효과가 뚜렷하지 않아 6 → 0(비활성)으로 되돌림. 필요시 4~8로 재시도 가능.
-        self.lane_deadband = 0
+        #   [재활성] P를 비례제어로 낮춘 것과 함께 미세 jitter 제거용으로 10 적용. 더 흔들리면 ↑(12~15).
+        self.lane_deadband = 10
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
         self.turn_confirm_count = 5
