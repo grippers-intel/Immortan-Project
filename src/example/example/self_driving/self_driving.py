@@ -448,7 +448,11 @@ class SelfDrivingNode(Node):
                 #   crosswalk_distance가 요동쳐도(예: 454→316→337) 정지가 풀리지 않게 함. 예전엔 316처럼
                 #   임계값 아래로 잠깐 떨어지면 정지가 한 프레임 풀려 차선추종이 로봇을 앞으로 밀어 '덜컥'거림.
                 #   정지는 stopped_enough(2초) 후 passed=True 될 때만 해제된다.
-                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close or self.crosswalk_stopping) and not self.crosswalk_passed:
+                # [C 수정] not start_turn: 코너 급회전/복귀 중(start_turn=True)에는 횡단보도/빨강 정지를 미룸.
+                #   코너 출구 바로에 붙은 횡단보도가 회전 도중에 잡혀 로봇이 코너 중간에 얼어붙던 문제 방지.
+                #   코너가 끝나(start_turn=False) 차선추종으로 복귀한 뒤, 여전히 보이는 횡단보도에서 정지한다.
+                #   (정지 중엔 로봇이 서 있어 start_turn이 새로 켜지지 않으므로 진행 중 정지를 끊지 않음)
+                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close or self.crosswalk_stopping) and not self.crosswalk_passed and not self.start_turn:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
