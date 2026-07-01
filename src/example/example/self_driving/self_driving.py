@@ -25,7 +25,7 @@ from sdk.common import colors, plot_one_box
 from example.self_driving import lane_detect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState, RGBStates, RGBState
+from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState, RGBStates, RGBState, ButtonState
 
 class SelfDrivingNode(Node):
     def __init__(self, name):
@@ -63,6 +63,11 @@ class SelfDrivingNode(Node):
         self.rgb_pub = self.create_publisher(RGBStates, '/ros_robot_controller/set_rgb', 1)
         self.result_publisher = self.create_publisher(Image, '~/image_result', 1)
 
+        # [스위치 출발] 온보드 버튼(확장보드 key1/key2)으로 주행 시작.
+        #   버튼 이벤트는 /ros_robot_controller/button 으로 발행됨(ButtonState: id=1/2, state).
+        #   규칙: 스위치로 출발(자동출발 -5 감점 방지). 버튼 누르면 button_callback에서 self.start=True.
+        self.create_subscription(ButtonState, '/ros_robot_controller/button', self.button_callback, 1)
+
         self.create_service(Trigger, '~/enter', self.enter_srv_callback) # enter the game
         self.create_service(Trigger, '~/exit', self.exit_srv_callback) # exit the game
         self.create_service(SetBool, '~/set_running', self.set_running_srv_callback)
@@ -88,8 +93,10 @@ class SelfDrivingNode(Node):
         if 1:#self.get_parameter('start').value:
             self.display = True
             self.enter_srv_callback(Trigger.Request(), Trigger.Response())
+            # [스위치 출발] 자동출발 금지. enter로 카메라/YOLO 구독만 준비하고 start=False로 대기.
+            #   온보드 버튼을 누르면 button_callback에서 self.start=True 가 되어 주행 시작한다.
             request = SetBool.Request()
-            request.data = True
+            request.data = False
             self.set_running_srv_callback(request, SetBool.Response())
 
         #self.park_action() 
@@ -264,6 +271,15 @@ class SelfDrivingNode(Node):
         response.message = "set_running"
         return response
 
+    def button_callback(self, msg):
+        # [스위치 출발] 온보드 버튼이 눌리면 주행 시작.
+        #   state=1(PRESSED 눌림), 5(CLICK 클릭) 둘 다 시작 트리거로 인정. id(key1/key2)는 무시(둘 중 아무 버튼).
+        #   enter(초기화)가 끝난 뒤에만, 아직 출발 전(not start)일 때만 반응 → 주행 중 오작동 방지.
+        if msg.state in (1, 5) and self.enter and not self.start:
+            self.get_logger().info('\033[1;32m%s\033[0m' % ('START button pressed (id=%d) -> 주행 시작' % msg.id))
+            with self.lock:
+                self.start = True
+
     def shutdown(self, signum, frame):  # press 'ctrl+c' to close the program
         self.is_running = False
 
@@ -398,6 +414,8 @@ class SelfDrivingNode(Node):
             result_image = image.copy()
             if self.start:
                 self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+            else:
+                self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
