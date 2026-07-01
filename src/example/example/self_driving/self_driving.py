@@ -478,12 +478,12 @@ class SelfDrivingNode(Node):
                 if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
                     if (
                         len(center_x) >= 5
-                        and center_x[0]
-                        != -1  # TODO : 280 상한선 제거 - 실제 코너에서는 박스1,2,3이 같이 우측으로 흐르다 차례로 빠지는 게 정상 신호였음 (박스1 살아있는지만 확인, 드리프트와 진짜 코너 구분은 다른 방법 필요)
+                        and center_x[0] != -1
+                        and center_x[2]
+                        == -1  # Box3도 -1이어야 진짜 코너 (직진 중 Box4,5만 죽는 경우 제외)
                         and center_x[3] == -1
                         and center_x[4] == -1
-                        and time.time() - self.crosswalk_ignore_time
-                        > 1.8  # TODO : 실측 기반 계산 - 횡단보도1 정지선~횡단보도2 끝까지 약 60cm, 직진속도 0.4m/s 기준 1.5초 + 여유 0.3초 = 1.8초. 비전 신호(마지막으로 본 시점) 대신 거리/속도 기반 고정값으로 변경 - 속도 바뀌면 이 값도 같이 재계산 필요
+                        and time.time() - self.crosswalk_ignore_time > 1.8
                     ):
                         if self.count_turn == 0:
                             self.turn_count_start_box1 = center_x[
