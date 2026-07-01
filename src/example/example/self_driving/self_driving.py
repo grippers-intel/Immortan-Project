@@ -162,6 +162,9 @@ class SelfDrivingNode(Node):
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
         self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
         self.crosswalk_distance = 0  # distance to the zebra crossing
+        self.crosswalk_box_height = (
+            0  # YOLO box_height of closest crosswalk (proximity proxy)
+        )
         self.crosswalk_last_seen_time = 0  # TODO : 깜빡임 방지용 마지막 감지 시간
         self.crosswalk_raw_last_seen_time = (
             0  # TODO : 필터 통과 여부 상관없이 YOLO가 crosswalk를 본 마지막 시간 → 추가
@@ -357,11 +360,11 @@ class SelfDrivingNode(Node):
                     and not self.crosswalk_ignore
                 ):
                     self.pre_slow_down = (
-                        True  # 거리 무관하게 감지 즉시 감속 (원거리 pre-decel)
+                        True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
                     )
                     if (
-                        self.crosswalk_distance > 280
-                    ):  # 근거리 → count 2회 확인 후 완전 정지
+                        self.crosswalk_box_height > 20
+                    ):  # 근거리 (box_height>20) → count 후 완전 정지
                         self.count_crosswalk += 1
                         if self.count_crosswalk >= 2:
                             self.count_crosswalk = 0
@@ -506,8 +509,8 @@ class SelfDrivingNode(Node):
                         else:
                             self.count_turn += 1
                         if (
-                            self.count_turn > 4
-                            and not self.start_turn  # TODO : 3->4, 속도 0.5->0.4로 낮춘 만큼 기준도 같이 재조정 (0.3 기준 6, 0.5 기준 3에 맞춰 0.4는 중간값 4)
+                            self.count_turn > 7
+                            and not self.start_turn  # TODO : 4->7, 0.5m/s 기준 3프레임 추가 ≈ 10cm 더 진입 후 회전 (우회전 후 오른쪽 치우침 개선)
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
@@ -639,6 +642,7 @@ class SelfDrivingNode(Node):
                 self.crosswalk_distance = 0
         else:
             min_distance = 0
+            min_box_height = 0
             found_traffic_light = False
             for i in self.objects_info:
                 class_name = i.class_name
@@ -663,6 +667,7 @@ class SelfDrivingNode(Node):
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                             min_distance = center[1]
+                            min_box_height = box_height
                             self.get_logger().info(
                                 f"crosswalk box_height: {box_height}, box_width: {box_width}"
                             )  # TODO 00 : 높이/너비 로그 → 추가
@@ -697,13 +702,16 @@ class SelfDrivingNode(Node):
                 self.crosswalk_ignore
             ):  # TODO : 정지 직후 보호기간 동안은 횡단보도 거리값 추적 자체를 무시 (두번째 횡단보도 영향 차단)
                 self.crosswalk_distance = 0
+                self.crosswalk_box_height = 0
             elif (
                 min_distance > 0
             ):  # TODO : 횡단보도 발견 시 시간 기록, 못 찾으면 0.3초간 이전값 유지
                 self.crosswalk_distance = min_distance
+                self.crosswalk_box_height = min_box_height
                 self.crosswalk_last_seen_time = time.time()
             elif time.time() - self.crosswalk_last_seen_time > 0.3:
                 self.crosswalk_distance = 0
+                self.crosswalk_box_height = 0
 
 
 def main():
