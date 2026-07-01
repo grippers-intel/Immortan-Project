@@ -110,6 +110,7 @@ class SelfDrivingNode(Node):
         self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
                                    #   (실측 로그 기반으로 1200 설정)
         self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
+        self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
 
@@ -149,10 +150,10 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 260      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-                                            #   (0.45 기준 260. 밟으면 ↓, 두 횡단보도 사이서 멈추면 ↑)
-        self.crosswalk_min_area = 3000      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분을
-                                            #   한프레임씩 횡단보도로 오검출하던 것 제거. 진짜 횡단보도 미인식이면 ↓
+        self.crosswalk_stop_dist = 210      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+                                            #   (260→210: 0.45+15fps라 늦게 잡혀 지나쳐 정지 → 더 일찍 정지)
+        self.crosswalk_min_area = 2200      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
+                                            #   여전히 걸러짐. (3000→2200: 더 멀리서 미리 잡아 정지 여유 확보)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0        # 정지 시작 시각
@@ -275,9 +276,11 @@ class SelfDrivingNode(Node):
     # parking processing
     def park_action(self):
         if self.machine_type == 'MentorPi_Mecanum':
-            # [추가] 주차 전 똑바로 1초 직진 — 주차칸 앞까지 더 들어간 뒤 옆으로 주차(우회전 동작과 동일 패턴)
+            # [추가] 주차 전 똑바로 직진 — 주차칸 앞까지 더 들어간 뒤 옆으로 주차.
+            #   [수정] normal_speed(순항)가 아니라 고정 park_forward_speed 사용 — 순항속도 올리면 전진거리가
+            #   같이 늘어 주차라인을 넘어가던 문제 방지.
             twist = Twist()
-            twist.linear.x = self.normal_speed
+            twist.linear.x = self.park_forward_speed
             self.mecanum_pub.publish(twist)
             time.sleep(self.park_forward_time)
             # 옆으로 이동(메카넘 횡이동)하여 주차칸에 진입
@@ -346,6 +349,7 @@ class SelfDrivingNode(Node):
         if state == self.last_led_state:
             return
         self.last_led_state = state
+        self.get_logger().info('\033[1;32mLED L=%s R=%s\033[0m' % (c1, c2))  # [진단] LED 색 바뀔 때만
         msg = RGBStates()
         msg.states = [
             RGBState(index=1, red=int(c1[0]), green=int(c1[1]), blue=int(c1[2])),
