@@ -149,8 +149,8 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 230      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-                                            #   (280→230: 속도 0.6이라 더 일찍(멀리서) 멈춰야 밟지 않음)
+        self.crosswalk_stop_dist = 260      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+                                            #   (0.45 기준 260. 밟으면 ↓, 두 횡단보도 사이서 멈추면 ↑)
         self.crosswalk_min_area = 3000      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분을
                                             #   한프레임씩 횡단보도로 오검출하던 것 제거. 진짜 횡단보도 미인식이면 ↓
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
@@ -159,7 +159,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.6  # normal driving speed (0.3→0.6 두 배. 코너링/횡단보도 정지거리 재튜닝 필요)
+        self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -177,12 +177,12 @@ class SelfDrivingNode(Node):
         self.turn_threshold = 200
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
-        #   속도와 같은 비율로 스케일(반경 = speed/|angular|). 0.3→0.6이라 -0.9→-1.8.
+        #   속도와 같은 비율로 스케일(반경 = speed/|angular|). 0.3→0.45라 -0.9→-1.35.
         #   ※ normal_speed를 바꾸면 이 값도 같은 비율로 바꿔야 함.
-        self.turn_angular_z = -1.8
+        self.turn_angular_z = -1.35
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
-        self.angular_z_limit = 0.4
+        self.angular_z_limit = 0.25
         # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
         #   조향하지 않고 직진(미세 진동 제거). 0이면 비활성(원래 동작).
         #   [복원] 효과가 뚜렷하지 않아 6 → 0(비활성)으로 되돌림. 필요시 4~8로 재시도 가능.
