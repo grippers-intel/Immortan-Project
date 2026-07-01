@@ -355,23 +355,25 @@ class SelfDrivingNode(Node):
                     60 < self.crosswalk_distance
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
-                ):  # TODO 00 : ignore 조건 추가, 거리기준 100->60 (더 일찍 정지)
-                    self.count_crosswalk += 1
-                    if self.count_crosswalk == 1:  # 첫 감지: pre-decel 시작
-                        self.pre_slow_down = True
+                ):
+                    self.pre_slow_down = (
+                        True  # 거리 무관하게 감지 즉시 감속 (원거리 pre-decel)
+                    )
                     if (
-                        self.count_crosswalk == 2
-                    ):  # judge multiple times to prevent false detection
+                        self.crosswalk_distance > 280
+                    ):  # 근거리 → count 2회 확인 후 완전 정지
+                        self.count_crosswalk += 1
+                        if self.count_crosswalk >= 2:
+                            self.count_crosswalk = 0
+                            self.start_slow_down = True
+                            self.pre_slow_down = False
+                            self.count_slow_down = time.time()
+                    else:  # 원거리 → 아직 count 안함, 0.05m/s로만 감속 유지
                         self.count_crosswalk = 0
-                        self.start_slow_down = True  # sign for slowing down
-                        self.pre_slow_down = False  # full stop으로 전환, pre-decel 해제
-                        self.count_slow_down = (
-                            time.time()
-                        )  # fixing time for slowing down
                 else:
                     if not self.start_slow_down:
                         self.count_crosswalk = 0
-                        self.pre_slow_down = False  # 횡단보도 사라지면 pre-decel 해제
+                        self.pre_slow_down = False
 
                 # deceleration processing
                 # TODO 00 : 교차로 인식 시 일단 정지
@@ -655,8 +657,8 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        15 < box_height < 180 and 80 < box_width
-                    ):  # TODO : 25->15 - 카메라 각도를 위로 변경한 후 횡단보도가 더 납작하게(높이 16~24, 너비 295~634) 잡히는 경우가 많아 인식을 자주 놓침, 가짜 오인식 노이즈는 높이 4~9 수준이라 15도 안전
+                        10 < box_height < 180 and 150 < box_width
+                    ):  # height 15->10: 먼 거리 감지용 (노이즈 4~9, 실제 원거리 11~14), width 80->150: height 낮춘 보상으로 폭 필터 강화
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
