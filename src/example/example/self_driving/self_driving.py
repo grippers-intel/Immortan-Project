@@ -152,8 +152,8 @@ class SelfDrivingNode(Node):
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
         self.crosswalk_stop_dist = 210      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
                                             #   (260→210: 0.45+15fps라 늦게 잡혀 지나쳐 정지 → 더 일찍 정지)
-        self.crosswalk_min_area = 2200      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
-                                            #   여전히 걸러짐. (3000→2200: 더 멀리서 미리 잡아 정지 여유 확보)
+        self.crosswalk_min_area = 1800      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
+                                            #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0        # 정지 시작 시각
@@ -161,6 +161,7 @@ class SelfDrivingNode(Node):
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.corner_speed = 0.3   # 코너 회전 중 + 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -534,7 +535,11 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == 'MentorPi_Acker':
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    self.mecanum_pub.publish(twist)  
+                    # [추가] 코너 회전 중 + 복귀(start_turn) 동안 감속 — 코너 직후 갑자기 나타나는
+                    #   횡단보도를 제때 멈추기 위함. 직선에선 normal_speed 그대로.
+                    if self.start_turn or lane_x > self.turn_threshold:
+                        twist.linear.x = self.corner_speed
+                    self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
 
