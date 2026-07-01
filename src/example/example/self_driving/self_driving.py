@@ -498,17 +498,7 @@ class SelfDrivingNode(Node):
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_ignore_time > 1.8
                     ):
-                        if self.count_turn == 0:
-                            self.turn_count_start_box1 = center_x[
-                                0
-                            ]  # TODO : 카운트 시작 시점의 박스1 값 기록 (드리프트 감지용) → 추가
-                        if (
-                            abs(center_x[0] - self.turn_count_start_box1) > 70
-                        ):  # TODO : 박스1이 카운트 시작 이후 70픽셀 넘게 움직이면 드리프트 중으로 보고 리셋 - camera18 분석: 가짜 신호 75.5px drift(리셋), 진짜 코너 60.5px drift(count=5 도달) → 70px가 최적 구분점 → 수정
-                            self.count_turn = 1
-                            self.turn_count_start_box1 = center_x[0]
-                        else:
-                            self.count_turn += 1
+                        self.count_turn += 1  # TODO : drift 감지 제거 - 0.5m/s에서 진짜 코너 drift(88px)가 기준(70px) 초과해서 카운트 리셋되는 문제 → 수정
                         if (
                             self.count_turn > 4
                             and not self.start_turn  # TODO : 7->4 복원, angular_z 감소로 우회전 후 위치 보정
@@ -520,10 +510,7 @@ class SelfDrivingNode(Node):
                                 False  # TODO 01 : 우회전 시작 시 횡단보도 플래그 리셋
                             )
                             self.stop = False  # TODO 01 : 정지 플래그 리셋
-                    else:
-                        self.count_turn = max(
-                            0, self.count_turn - 1
-                        )  # TODO 01 : 완전 리셋 대신 서서히 감소 (깜빡임에 강하게)
+                    # else: count 유지 (감소 제거) - TODO : Box1 깜빡임으로 count가 1-2 사이 진동, 5 미도달 → 감소 없애고 누적되도록 수정
                     if self.start_turn:
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = self.drive_params["turn_right"][
