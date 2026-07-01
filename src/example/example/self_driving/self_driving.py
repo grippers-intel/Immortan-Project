@@ -503,8 +503,8 @@ class SelfDrivingNode(Node):
                                 0
                             ]  # TODO : 카운트 시작 시점의 박스1 값 기록 (드리프트 감지용) → 추가
                         if (
-                            abs(center_x[0] - self.turn_count_start_box1) > 30
-                        ):  # TODO : 박스1이 카운트 시작 이후 30픽셀 넘게 움직이면 드리프트 중으로 보고 리셋 - 실제 로그로 검증: 가짜 신호는 47.5px 드리프트, 진짜 코너는 20px 이내로 안정적 (시간 기준 게이트로는 둘이 너무 가까운 타이밍이라 구분 불가) → 추가
+                            abs(center_x[0] - self.turn_count_start_box1) > 70
+                        ):  # TODO : 박스1이 카운트 시작 이후 70픽셀 넘게 움직이면 드리프트 중으로 보고 리셋 - camera18 분석: 가짜 신호 75.5px drift(리셋), 진짜 코너 60.5px drift(count=5 도달) → 70px가 최적 구분점 → 수정
                             self.count_turn = 1
                             self.turn_count_start_box1 = center_x[0]
                         else:
