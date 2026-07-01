@@ -172,6 +172,10 @@ class SelfDrivingNode(Node):
 
         # 메카넘 우회전: 전진 + 우측 횡이동 + yaw 회전
         self.turn_right_speed = 0.18
+        # [수정] 누락되어 있던 변수. turn_right_action()의 1단계(회전 전 직진)에서 참조하는데
+        #   정의가 없어 AttributeError로 스레드가 죽고 회전이 아예 시작되지 않던 버그 수정.
+        #   기존 turn_right_approach_time(1.35)과 별개로, 교차로 안쪽까지 들어가는 짧은 직진 시간.
+        self.turn_right_forward_time = 0.4
         self.turn_right_lateral_speed = -0.16  # 음수: 오른쪽 횡이동
         self.turn_right_angular = -1.05  # 음수: 우회전
         self.turn_right_duration = 1.25  # 기존 3.5보다 짧게 시작
@@ -379,8 +383,15 @@ class SelfDrivingNode(Node):
         twist.angular.z = 0.0
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_forward_time)
-        # 2단계: 전진하며 우회전
-        twist.angular.z = self.turn_right_angular
+        # 2단계: 전진 + 우측 횡이동 + yaw 회전을 동시에 → 메카넘휠 전용 대각선 회전.
+        #   [수정] linear.y가 한 번도 설정되지 않아 실제로는 일반 차량과 동일한 제자리 yaw
+        #   회전만 하고 있었음(메카넘 이점 미활용). Acker(일반 조향) 기체는 linear.y를 못 쓰므로
+        #   기존처럼 순수 yaw 회전만 하도록 분기 처리.
+        if self.machine_type == "MentorPi_Acker":
+            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
+        else:
+            twist.linear.y = self.turn_right_lateral_speed
+            twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
         time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
         self.mecanum_pub.publish(Twist())  # 정지
