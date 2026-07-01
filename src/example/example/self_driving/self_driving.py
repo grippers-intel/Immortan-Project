@@ -129,9 +129,9 @@ class SelfDrivingNode(Node):
         self.pid = pid.PID(0.4, 0.0, 0.1)  # 고속용 D값 상향
         self.lock = threading.RLock()
         self.machine_type = os.environ.get("MACHINE_TYPE", "MentorPi_Mecanum")
-        self.test_mode = (
-            self.declare_parameter("test_mode", "false").value.lower() == "true"
-        )
+        if not self.has_parameter("test_mode"):
+            self.declare_parameter("test_mode", "false")
+        self.test_mode = str(self.get_parameter("test_mode").value).lower() == "true"
 
         self.image_queue = queue.Queue(maxsize=2)
         self.classes = ["go", "right", "park", "red", "green", "crosswalk"]
