@@ -150,8 +150,9 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 210      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-                                            #   (260→210: 0.45+15fps라 늦게 잡혀 지나쳐 정지 → 더 일찍 정지)
+        self.crosswalk_stop_dist = 320      # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+                                            #   (210→320: 횡단보도가 y≈300에 처음 잡혀 바로 멈춰 '약간 일찍'이던 것 →
+                                            #    더 가까이(320)서 멈춤. 지나치면 ↓, 여전히 이르면 ↑)
         self.crosswalk_min_area = 1800      # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
                                             #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
@@ -161,7 +162,7 @@ class SelfDrivingNode(Node):
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
-        self.corner_speed = 0.3   # 코너 회전 중 + 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고
+        self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -194,8 +195,9 @@ class SelfDrivingNode(Node):
         self.turn_confirm_count = 5
         # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
         #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
-        #   [복원] 1.5 → 2.0(원래)으로 되돌림.
-        self.turn_recover_time = 2.0
+        #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
+        #   갑툭튀 횡단보도를 느린 상태로 만나 제때 멈추게 함.
+        self.turn_recover_time = 2.5
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
