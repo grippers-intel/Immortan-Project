@@ -260,12 +260,15 @@ class SelfDrivingNode(Node):
         )
         #   (0.8→1.1: 조금 일찍 돌아 안쪽 라인 밟던 것 → 더 들어간 뒤 회전)
         self.turn_right_duration = (
-            3.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            2.6  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
         #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
         #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
         #   [7차 실차 테스트] "매카넘 회전 자체는 잘 됐는데 회전각이 너무 넓다" ->
         #   3.3에서 처음 값이었던 3.0으로 되돌림. 여전히 과하게 돌면 더 ↓, 덜 돌면 ↑
+        #   [8차 실차 테스트] 3.0에서도 회전각이 과해 3번째 코너의 초록 블록 위로
+        #   올라타며 회전을 마침(실제 트랙 이탈 확인) -> 2.6으로 추가 인하. 그래도
+        #   과하면 더 ↓(2.3 등 단계적으로), 이번엔 덜 돌면 ↑
         # [③ 시작점 정규화] 우회전은 개방루프라 정지 위치가 매번 달라지면 도착 라인도 달라짐.
         #   최소 직진(turn_right_forward_time) 후, 횡단보도가 완전히 지나갈 때까지(거리<pass_dist) 추가 전진 →
         #   항상 '횡단보도를 막 지난 지점'에서 회전 시작 → 시작점 일정. (검출 실패 대비 타임아웃 있음)
@@ -511,7 +514,12 @@ class SelfDrivingNode(Node):
         # "Unhandled button event: 0" 에러만 찍혔음(=버튼을 눌렀다 떼는 일반적인 클릭이
         # 통째로 씹힘). 그 파일도 함께 수정해 이제는 0/1 두 상태 모두 정상 publish됨.
         # 이 클래스에서는 그에 맞춰 기존에 잘못 가정했던 (1, 5) 대신 실제로 나올 수 있는
-        # 두 값 (0=클릭 완료, 1=눌린 상태) 모두를 시작 신호로 인정하도록 수정.
+        # 두 값(0, 1) 모두를 시작 신호로 인정하도록 수정.
+        # [8차 실차 테스트 기준 정정] 실측(1~4차 로그 전체)으로는 일반 클릭이 항상
+        # state=1로만 들어오고 state=0은 한 번도 관측되지 않았음 - 아래 주석의
+        # "0=클릭 완료" 가정은 틀렸던 것으로 보임. state=1이 이 보드에서의 실제 클릭
+        # 신호. (0,1) 둘 다 시작 신호로는 여전히 허용하되, 더블클릭 판정은 실측값인
+        # state=1 기준으로 함(아래 button_callback 참고).
         self.get_logger().info(
             "\033[1;36m%s\033[0m"
             % f"button msg received: id={msg.id}, state={msg.state}"
@@ -522,10 +530,14 @@ class SelfDrivingNode(Node):
             return
 
         # [초기화 버튼] 시작 버튼을 짧은 시간(double_click_window) 내에 두 번 클릭하면
-        # 초기화로 판단. "완료된 클릭"(state=0)만 카운트함 - state=1(눌린 상태)까지
-        # 같이 세면 한 번의 물리적 클릭에서 두 상태가 연달아 들어와도 더블클릭으로
-        # 오인식할 위험이 있음.
-        if msg.state == 0:
+        # 초기화로 판단.
+        # [8차 실차 테스트] 더블클릭 초기화가 전혀 동작 안 한다는 리포트 확인 후
+        # 1~4차 로그 전체를 grep해보니 실제 버튼 이벤트는 전부 state=1이었고 state=0은
+        # 단 한 번도 관측되지 않았음(이 보드/펌웨어에서는 "클릭 완료"가 1로 오는 것으로
+        # 보임 - 애초에 0/1 의미를 실측 없이 추측했던 게 잘못이었음). state=0 기준으로
+        # 카운트하던 로직이라 더블클릭 분기 자체가 한 번도 실행되지 않았던 것. 실제 관측된
+        # state=1 기준으로 수정.
+        if msg.state == 1:
             now = time.time()
             if now - self.last_click_time <= self.double_click_window:
                 self.last_click_time = (
@@ -805,11 +817,19 @@ class SelfDrivingNode(Node):
                     time.time() - self.turn_right_set_time
                     > self.turn_right_wait_timeout
                 )
+                # [8차 실차 테스트] 우회전을 두 번 수행한 사례 발견: 첫 회전이 회전각
+                # 과다로 트랙을 벗어나며 카메라가 이상한 각도를 보게 됐고, 그 과정에서
+                # "right" 표지판이 다시 잡혀 turn_right가 재차 True가 됐음. 이 트리거는
+                # not self.going_to_park를 확인하지 않아서, 회전을 이미 한 번 마쳤어도
+                # (going_to_park=True) 다시 표지판이 잡히면 두 번째 execute_turn_right가
+                # 또 실행될 수 있었음. 우회전은 경기당 정확히 한 번만 일어나야 하는
+                # 미션이므로 going_to_park 이후에는 절대 재실행되지 않도록 가드 추가.
                 if (
                     self.turn_right
                     and not self.doing_turn_right
                     and not self.start_park
                     and not self.parked
+                    and not self.going_to_park
                     and not self.stop
                     and crosswalk_gate_ok
                 ):
