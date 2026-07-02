@@ -1416,7 +1416,7 @@ class SelfDrivingNode(Node):
 
                 # line following processing
                 # self_driving.py가 lane_detect에서 계산한 lane_x를 PID 목표값(130px)과 비교해 조향
-                result_image, lane_angle, lane_x = self.lane_detect(
+                result_image, lane_angle, _, lane_x = self.lane_detect(
                     binary_image, image.copy()
                 )  # the coordinate of the line while the robot is in the middle of the lane
                 # TODO : lane_angle을 이용해 직선주행시 가속, 커브에서 감속 구현
