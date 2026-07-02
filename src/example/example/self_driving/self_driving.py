@@ -706,8 +706,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 1.8
-                    ):  # 2.6→1.8초: 2번째 코너에서 차선 소실 시 2.6s 내내 돌던 문제, 1번째 코너 정상 탈출(1.4s) 기준으로 여유 0.4s
+                        turn_elapsed > 1.3
+                    ):  # 2.6→1.8→1.3초: 과회전 방지, ~74° 회전 후 라인디텍팅 PID 보정에 의존
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
