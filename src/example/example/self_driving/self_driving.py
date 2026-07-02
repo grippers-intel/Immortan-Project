@@ -264,7 +264,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.normal_speed = 0.35  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
@@ -496,30 +496,30 @@ class SelfDrivingNode(Node):
     def turn_right_action(self):
         # 1단계: 회전 없이 똑바로 직진 — 교차로 안쪽까지 더 들어간 뒤 돌게 함(일찍 꺾임 방지)
         twist = Twist()
-        twist.linear.x = self.turn_right_speed
-        twist.angular.z = 0.0
-        # 1-a) 최소 직진(기존 동작 보장): 오검출로 너무 일찍 회전하는 것 방지.
-        t0 = time.time()
-        while time.time() - t0 < self.turn_right_forward_time:
-            self.mecanum_pub.publish(twist)
-            time.sleep(0.03)
-        # 1-b) [③ 시작점 정규화] 횡단보도가 완전히 지나갈 때까지(거리<pass_dist, 3프레임 연속) 추가 전진.
-        #   정지 위치가 매번 달라도 '횡단보도를 막 지난 지점'에서 회전이 시작됨 → 시작점 일정.
-        #   검출이 안 끊기거나 실패해도 turn_right_forward_max 타임아웃으로 반드시 회전으로 넘어감.
-        gone = 0
-        while time.time() - t0 < self.turn_right_forward_max:
-            self.mecanum_pub.publish(twist)
-            if self.crosswalk_distance < self.turn_right_pass_dist:
-                gone += 1
-                if gone >= 3:
-                    break
-            else:
-                gone = 0
-            time.sleep(0.03)
-        self.get_logger().info(
-            "\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m"
-            % (time.time() - t0, self.crosswalk_distance)
-        )
+        # twist.linear.x = self.turn_right_speed
+        # twist.angular.z = 0.0
+        # # 1-a) 최소 직진(기존 동작 보장): 오검출로 너무 일찍 회전하는 것 방지.
+        # t0 = time.time()
+        # while time.time() - t0 < self.turn_right_forward_time:
+        #     self.mecanum_pub.publish(twist)
+        #     time.sleep(0.03)
+        # # 1-b) [③ 시작점 정규화] 횡단보도가 완전히 지나갈 때까지(거리<pass_dist, 3프레임 연속) 추가 전진.
+        # #   정지 위치가 매번 달라도 '횡단보도를 막 지난 지점'에서 회전이 시작됨 → 시작점 일정.
+        # #   검출이 안 끊기거나 실패해도 turn_right_forward_max 타임아웃으로 반드시 회전으로 넘어감.
+        # gone = 0
+        # while time.time() - t0 < self.turn_right_forward_max:
+        #     self.mecanum_pub.publish(twist)
+        #     if self.crosswalk_distance < self.turn_right_pass_dist:
+        #         gone += 1
+        #         if gone >= 3:
+        #             break
+        #     else:
+        #         gone = 0
+        #     time.sleep(0.03)
+        # self.get_logger().info(
+        #     "\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m"
+        #     % (time.time() - t0, self.crosswalk_distance)
+        # )
         # 2단계: 전진하며 우회전
         twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
