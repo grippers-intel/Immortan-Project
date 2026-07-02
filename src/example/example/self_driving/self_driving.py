@@ -285,12 +285,18 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 320  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_dist = 260  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         #   (210→320: 횡단보도가 y≈300에 처음 잡혀 바로 멈춰 '약간 일찍'이던 것 →
         #    더 가까이(320)서 멈춤. 지나치면 ↓, 여전히 이르면 ↑)
+        #   [4차 실차 테스트] 320은 반대로 "탐지는 됐지만 제대로 멈추지 못함" 증상의
+        #   원인 중 하나로 보임 - 정지 확정까지 필요한 여유 프레임이 부족했음. 320→260으로
+        #   낮춰 더 멀리서부터 정지 판단을 시작하게 해 확정까지 걸리는 시간을 벌어줌.
         self.crosswalk_min_area = (
-            1800  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
+            1400  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
         )
+        #   [4차 실차 테스트] "더 널널한 거리에서부터 탐지" 요청으로 1800→1400 완화.
+        #   바닥 허연 부분(≈1200)과의 여유가 줄었지만 aspect(≥2.0)/score(≥0.25) 필터가
+        #   추가로 걸러주는 것을 기대. 오검출 다시 늘면 ↑, 여전히 늦게 잡히면 더 ↓
         #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
         self.crosswalk_min_aspect = (
             2.0  # [종횡비 필터] 박스 가로/세로 비가 이 값 이상일 때만 인정.
@@ -306,6 +312,11 @@ class SelfDrivingNode(Node):
         # (실제 score 값)를 보고 "균열은 이 값 미만/진짜는 이 값 이상"인 지점을 찾아
         # 다시 올릴 것.
         self.crosswalk_min_score = 0.25
+        # [4차 실차 테스트] "탐지는 됐지만 제대로 멈추지 못함" 증상 - 정지 확정에 3프레임
+        # 연속 검출을 요구했는데, 박스 좌표가 프레임마다 살짝 흔들리면(jitter) distance가
+        # stop_dist 근처에서 오르내리며 카운터가 계속 리셋되어 확정 전에 이미 지나쳐버림.
+        # 3→2로 완화(위 stop_dist를 260으로 낮춘 것과 함께 확정까지 여유를 더 줌).
+        self.crosswalk_confirm_count = 2
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
@@ -730,7 +741,7 @@ class SelfDrivingNode(Node):
                     if self.crosswalk_distance > self.crosswalk_stop_dist:
                         self.count_crosswalk += 1
                         if (
-                            self.count_crosswalk >= 3
+                            self.count_crosswalk >= self.crosswalk_confirm_count
                         ):  # judge multiple times to prevent false detection
                             self.count_crosswalk = 0
                             self.crosswalk_stopping = True
