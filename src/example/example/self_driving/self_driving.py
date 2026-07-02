@@ -143,8 +143,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.45,  # TODO : 0.30→0.375→0.45 (직진 0.5에서 급감속 없애기)
-                "angular_z": -1.4,  # TODO : -0.55→-1.35→-1.0→-1.2→-1.4 (늦은트리거가 원인, box5=200으로 조기트리거 복구 후 -1.4 유지)
+                "linear_x": 0.2,  # TODO : 0.45→0.2 (제자리 피벗 회전: 좌우 비율 ~7:1, 회전 중 전진 42→19cm로 줄여 코너 횡단보도 감지거리 확보)
+                "angular_z": -1.6,  # TODO : -0.55→-1.35→-1.0→-1.2→-1.4→-1.6 (좌우 바퀴 회전차 확대, 시간 0.93s로 85° 유지)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -273,8 +273,8 @@ class SelfDrivingNode(Node):
         turn_start = time.time()
         crosswalk_hit = False
         while (
-            time.time() - turn_start < 1.0
-        ):  # TODO : 0.6→1.0초 ≈ 80도 (angular_z=-1.35 기준, 최소 70~80도 보장)
+            time.time() - turn_start < 0.93
+        ):  # TODO : 0.6→1.0→0.93초 ≈ 85도 (angular_z=-1.6 기준, 1.6×0.93=1.49rad≈85°)
             if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
                 crosswalk_hit = True
                 break
@@ -454,50 +454,25 @@ class SelfDrivingNode(Node):
                     and not self.crosswalk_ignore
                     and not self.start_turn  # 우회전 중 횡단보도 감지로 인한 회전 중단 방지
                 ):
+                    # 홀짝 제거: 모든 횡단보도에서 정지. 재정지는 정지 후 시간 기반 무시(1.2초)로 방지
                     if not self.pre_slow_down:
-                        # 새 횡단보도 최초 감지 - 번호 부여
                         self.crosswalk_total_count += 1
                         self.get_logger().info(
-                            f"\033[1;36m횡단보도 #{self.crosswalk_total_count} 감지\033[0m"
+                            f"\033[1;36m횡단보도 #{self.crosswalk_total_count} 감지 → 정지 준비\033[0m"
                         )
-                        if self.just_stopped_crosswalk:
-                            # 구버전: 정지 직후 다음 횡단보도는 무조건 강제 무시 (카운트 유지)
-                            self.get_logger().info(
-                                "\033[1;36m구버전: 정지 후 첫 횡단보도 강제 무시\033[0m"
-                            )
-                            self.just_stopped_crosswalk = False
-                            self.crosswalk_ignore = True
-                            self.crosswalk_ignore_time = time.time()
-                            self.count_crosswalk = 0
-                        elif self.crosswalk_total_count % 2 == 0:
-                            # 짝수 (2,4,6,8번) → 즉시 통과 (정지 없음)
-                            self.get_logger().info(
-                                "\033[1;36m짝수 횡단보도 → 통과\033[0m"
-                            )
-                            self.crosswalk_ignore = True
-                            self.crosswalk_ignore_time = time.time()
-                            self.count_crosswalk = 0
-                        elif self.crosswalk_total_count == 9:
-                            # 9번 횡단보도 → 주차 (park_x 감지 시 park_action 실행, 기존 로직)
-                            self.get_logger().info(
-                                "\033[1;35m%s\033[0m" % "9번 횡단보도 → 주차 준비"
-                            )
-                            self.pre_slow_down = True
-                        else:
-                            # 홀수 (1,3,5,7번) → 정지 로직 진입
-                            self.pre_slow_down = True
+                        self.pre_slow_down = True
 
-                    if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
+                    if self.pre_slow_down:
                         if (
                             self.crosswalk_box_height > 15
-                        ):  # 30→60→50→20→15→12→15: 15가 적당한 정지 위치
+                        ):  # 크기(높이)>15가 2프레임 연속이면 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
                                 self.start_slow_down = True
                                 self.pre_slow_down = False
                                 self.count_slow_down = time.time()
-                        else:  # 원거리 → 아직 count 안함, 0.05m/s로만 감속 유지
+                        else:  # 원거리 → 아직 count 안함, 감속만 유지
                             self.count_crosswalk = 0
                 else:
                     if not self.start_slow_down:
@@ -713,7 +688,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.8
+                        turn_elapsed > 0.7
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
@@ -732,8 +707,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 1.1
-                    ):  # 2.6→1.8→1.3→1.1초: angular_z=-1.2로 올리면서 시간 줄여 과회전 방지 (1.2×1.1=1.32rad≈76°)
+                        turn_elapsed > 0.93
+                    ):  # 2.6→1.8→1.3→1.1→0.93초: angular_z=-1.6으로 올리면서 시간 단축, 1.6×0.93=1.49rad≈85° 상한
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
