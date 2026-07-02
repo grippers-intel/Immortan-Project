@@ -659,7 +659,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 240  # TODO 도로 중앙값 조절 (245->230->250->230->240: 클램프 0.13 고정, SetPoint만 단계적 조정)
+                            self.pid.SetPoint = 270  # TODO 도로 중앙값 조절 (245->230->250->230->240->250->270: 5cm 이상 오른쪽 이동 필요)
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
