@@ -16,6 +16,16 @@ import sdk.fps as fps
 from rclpy.node import Node
 import sdk.common as common
 
+# [빵판 LED] 다색 GPIO LED 드라이버(온보드 RGB와 동일 상태 표시). GPIO/하드웨어 없으면 import가 실패할 수
+#   있으므로 가드 — 실패해도 주행 노드는 정상 동작하고 빵판 LED만 비활성화된다.
+try:
+    import sdk.led as bb_led
+
+    _BB_LED_OK = True
+except Exception as _bb_e:
+    bb_led = None
+    _BB_LED_OK = False
+    print("[self_driving] breadboard LED disabled (import failed): %s" % _bb_e)
 # from app.common import Heart
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
@@ -188,10 +198,9 @@ class SelfDrivingNode(Node):
             2.0  # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         )
         self.park_capture_frames = 3  # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = (
-            0.7  # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
-        )
-        #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
+        self.park_standoff_fwd = 0.95  # 전진 이동 = fwd - 이 값. (0.5→0.8→0.95: 로그상 전진 0.94~1.07m로 여전히
+        #   라인 넘음 → 전진을 더 줄임. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽.
+        #   여전히 넘으면 ↑(1.05~1.15), 못 미치면 ↓)
         self.park_standoff_right = (
             0.15  # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         )
@@ -343,6 +352,24 @@ class SelfDrivingNode(Node):
         #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
         #   갑툭튀 횡단보도를 느린 상태로 만나 제때 멈추게 함.
         self.turn_recover_time = 2.5
+
+        # [차선 재획득 - far 폴백] 코너를 돈 뒤 로봇이 우측을 보면 좌측 라인이 가까운 ROI(near, x0~320)의
+        #   왼쪽 끝으로 밀려 lane_x=-1(이탈)이 됨. 이때 예전 코드는 else로 빠져 아무 명령도 안 내보내
+        #   '코너 후 횡단보도 정지→직진 안 함'이 발생. 하지만 먼 ROI(far)는 아직 라인을 봄(near=13일 때 far=171 등).
+        #   → near가 -1이면 far 기준 비례제어로 추종을 이어가 멈춤을 방지. near가 다시 잡히면 정상 near 추종 재개.
+        #   [코너 안전] 실제 코너 회전 중(start_turn=True)엔 발동 안 함(그땐 기존처럼 직전 명령 유지).
+        self.far_setpoint = (
+            290  # 직선에서 라인 중앙일 때의 far 값(로그 실측 중앙값≈287). far가 이보다
+        )
+        #   작으면(우측 응시) 좌회전, 크면 우회전. 재획득 후 한쪽 치우치면 이 값 조정.
+        self.far_recover_gain = (
+            0.004  # far 오차→각속도 비례게인. 복구가 느리면 ↑, 좌우로 튀면 ↓
+        )
+        self.far_recover_speed = 0.12  # near 상실 중 저속 전진(라인을 다시 near ROI로 끌어옴). 빨라 이탈하면 ↓
+        self.lane_lost_count = 0  # near가 연속으로 -1인 프레임 수(디바운스)
+        self.lane_lost_frames = (
+            4  # near가 이만큼 연속 -1일 때만 far 폴백. 코너 중 1~2프레임 순간 -1은 무시
+        )
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -697,7 +724,31 @@ class SelfDrivingNode(Node):
         else:
             # 주행 → 녹색
             led1 = led2 = GREEN
-        self.publish_leds(led1, led2)
+        self.publish_leds(led1, led2)  # 온보드 RGB (기존 그대로)
+        self.update_breadboard_leds()  # [빵판] 온보드와 동일한 상태로 함께 표시
+
+    # [빵판 LED] 온보드 LED와 '동일한' 상태를 빵판 다색 LED로도 표시.
+    #   온보드(update_leds)의 판정 순서와 동일하게 매핑. set_mode 가드가 있어 매 프레임 호출해도 안전(논블로킹).
+    #   매핑: 주차완료=전체점멸 / 정지·대기=빨강 / 우회전=우측노랑점멸 / 직진표지판=양쪽노랑점멸 / 주행=초록.
+    def update_breadboard_leds(self):
+        if not _BB_LED_OK:
+            return
+        try:
+            if self.parked:
+                bb_led.mode_park_done()
+            elif self.stop:
+                bb_led.mode_stop()
+            elif self.doing_turn_right or self.turn_right:
+                bb_led.mode_turn_right()
+            elif (
+                self.go_signal_time
+                and (time.time() - self.go_signal_time) < self.go_signal_duration
+            ):
+                bb_led.mode_straight()
+            else:
+                bb_led.mode_straight()
+        except Exception as e:
+            self.get_logger().warn("breadboard LED error: %s" % str(e))
 
     def main(self):
         while self.is_running:
@@ -717,6 +768,11 @@ class SelfDrivingNode(Node):
                 self.publish_leds(
                     (255, 0, 0), (255, 0, 0)
                 )  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
+                if _BB_LED_OK:  # [빵판] 대기 중에도 온보드와 동일하게 빨강
+                    try:
+                        bb_led.mode_stop()
+                    except Exception:
+                        pass
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
@@ -771,6 +827,10 @@ class SelfDrivingNode(Node):
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
                         self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                        # [코너 상태 종료] 횡단보도에 멈추면 코너는 확실히 끝난 것 → start_turn 해제.
+                        #   안 그러면 코너 직후 횡단보도에서 재출발 시 far 폴백이 '코너 중'으로 오인돼 막힘.
+                        self.start_turn = False
+                        self.count_turn = 0
                     stopped_enough = (
                         time.time() - self.crosswalk_stop_time
                     ) > self.crosswalk_stop_duration
@@ -1005,6 +1065,9 @@ class SelfDrivingNode(Node):
                     and not self.stop
                     and not self.doing_turn_right
                 ):  # 우회전/주차 동작 중엔 차선추종 양보
+                    self.lane_lost_count = (
+                        0  # near로 라인을 잡았으니 미검출 카운터 리셋
+                    )
                     if (
                         lane_x > self.turn_threshold
                     ):  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
@@ -1073,6 +1136,35 @@ class SelfDrivingNode(Node):
                         % (twist.linear.x, twist.angular.z, self.start_turn, lane_x)
                     )
                     self.mecanum_pub.publish(twist)
+                elif (
+                    not self.start_park
+                    and not self.going_to_park
+                    and not self.stop
+                    and not self.doing_turn_right
+                    and not self.start_turn
+                    and lane_x_far >= 0
+                ):
+                    # [far 폴백] 위 elif 실패 = near(lane_x)=-1(좌측 라인이 가까운 ROI를 벗어남, 코너 후 우측 응시).
+                    #   먼 ROI(far)는 아직 라인을 보므로 far 기준 비례제어로 추종을 이어가 '멈춤'을 방지한다.
+                    #   [가드] not start_turn: 실제 코너 회전/복귀 중엔 발동 안 함(그땐 else로 직전 명령 유지).
+                    #   [디바운스] near가 lane_lost_frames 연속 -1일 때만 → 코너 중 순간 -1 오발동 방지.
+                    self.lane_lost_count += 1
+                    if self.lane_lost_count >= self.lane_lost_frames:
+                        self.pid.clear()
+                        twist.linear.x = self.far_recover_speed
+                        ang = self.far_recover_gain * (
+                            self.far_setpoint - lane_x_far
+                        )  # far<setpoint(우측응시)→좌회전(+)
+                        twist.angular.z = common.set_range(
+                            ang, -self.angular_z_limit, self.angular_z_limit
+                        )
+                        self.get_logger().info(
+                            "\033[1;33mLANE near-lost -> FAR fallback far=%d ang=%.2f cnt=%d\033[0m"
+                            % (lane_x_far, twist.angular.z, self.lane_lost_count)
+                        )
+                        self.mecanum_pub.publish(twist)
+                    else:
+                        self.pid.clear()  # 아직 순간 누락 판정 구간 → 직전 명령 유지
                 else:
                     self.pid.clear()
 
@@ -1104,6 +1196,11 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
+        if _BB_LED_OK:  # [빵판] 종료 시 소등
+            try:
+                bb_led.all_off()
+            except Exception:
+                pass
         rclpy.shutdown()
 
     # Obtain the target detection result
