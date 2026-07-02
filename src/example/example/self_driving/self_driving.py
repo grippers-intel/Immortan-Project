@@ -210,7 +210,7 @@ class SelfDrivingNode(Node):
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.1  # normal driving speed
-        self.slow_down_speed = 0.15  # slowing down speed (0.05→0.15: 너무 느려서 7초에 0.35m밖에 못 가 cw_h가 50 미달)
+        self.slow_down_speed = 0.08  # slowing down speed (0.05→0.15→0.08: 감지 즉시 감속으로 바뀌어 접근 내내 저속 유지 → 관성 오버슈트 최소화. 정지기준 cw_h>13 낮아서 0.08로도 도달 OK)
         self.pre_slow_down = False  # count=1 감지 시 pre-decel 플래그
 
         self.traffic_signs_status = None  # record the state of the traffic lights
@@ -492,7 +492,7 @@ class SelfDrivingNode(Node):
                     if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
                         if (
                             self.crosswalk_box_height > 13
-                        ):  # 30→60→50→20→15→12→15→13: 15는 횡단보도 넘어서 정지
+                        ):  # 30→60→50→20→15→12→15→13: 15는 횡단보도 넘어서 정지 (관성 보상 위해 일찍 트리거)
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -697,14 +697,10 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    if (
-                        self.pre_slow_down
-                        and not self.start_turn
-                        and self.crosswalk_box_height > 11
-                    ):
+                    if self.pre_slow_down and not self.start_turn:
                         twist.linear.x = (
                             self.slow_down_speed
-                        )  # cw_h>11일 때 감속: 정지(15) 직전만 감속, 너무 이른 감속 방지 (10→13→11)
+                        )  # 횡단보도 감지 즉시 감속 시작(기어가듯 접근) → 관성 오버슈트 방지. cw_h>11 조건 제거: 정지 직전 감속은 제동거리 부족
                     if self.accel_ramp_active and not self.start_turn:
                         elapsed = time.time() - self.accel_ramp_start_time
                         if elapsed >= 0.15:
@@ -850,7 +846,7 @@ class SelfDrivingNode(Node):
                         10 < box_height < 250
                         and 150 < box_width
                         and box_width > 1.5 * box_height
-                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단, width>1.5*height: 비율 완화 (가까울수록 세로가 커짐, 180→250 상한도 완화)
+                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단(멀리서 일찍 감지해야 제동거리 확보), width>1.5*height: 비율 완화
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
