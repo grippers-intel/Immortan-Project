@@ -445,8 +445,8 @@ class SelfDrivingNode(Node):
                         True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
                     )
                     if (
-                        self.crosswalk_box_height > 60
-                    ):  # 30→60: 더 가까이 접근 후 정지 (box_height=46에서 너무 일찍 멈추는 문제)
+                        self.crosswalk_box_height > 50
+                    ):  # 30→60→50: 60은 box_height=83까지 기다려 너무 늦음, 50은 box_height=56에서 트리거
                         self.count_crosswalk += 1
                         if self.count_crosswalk >= 2:
                             self.count_crosswalk = 0
@@ -660,8 +660,8 @@ class SelfDrivingNode(Node):
                     if turn_elapsed > 0.8 and len(center_x) >= 4 and center_x[3] != -1:
                         self.count_turn_exit += 1  # TODO : 박스5->박스4 기준 변경 - 박스5는 끝까지 안 돌아오는 경우가 많아서 너무 늦게 탈출/영영 탈출 못함
                         if (
-                            self.count_turn_exit > 1
-                        ):  # 2→1: 1프레임 빠른 종료 (과회전 방지)
+                            self.count_turn_exit > 0
+                        ):  # 1프레임만 보여도 탈출 - 1코너에서 1프레임만 보이다 소실, count>1이면 못 빠져나와 1.8s 과회전
                             self.start_turn = False
                             self.count_turn = 0
                             self.count_turn_exit = 0
