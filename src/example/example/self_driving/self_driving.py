@@ -26,7 +26,29 @@ from sdk.common import colors, plot_one_box
 from example.self_driving import lane_detect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState
+from ros_robot_controller_msgs.msg import (
+    BuzzerState,
+    SetPWMServoState,
+    PWMServoState,
+    RGBState,
+    RGBStates,
+    ButtonState,
+)
+import RPi.GPIO as GPIO
+
+# GPIO 전구 핀 설정
+PIN_GREEN = 24
+PIN_RED = 25
+PIN_YELLOW_LEFT = 23
+PIN_YELLOW_RIGHT = 18
+GPIO_ALL_PINS = [PIN_GREEN, PIN_RED, PIN_YELLOW_LEFT, PIN_YELLOW_RIGHT]
+LED_ON = 1  # 반대면 0↔1 스왑
+LED_OFF = 0
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+for _pin in GPIO_ALL_PINS:
+    GPIO.setup(_pin, GPIO.OUT)
+    GPIO.output(_pin, LED_OFF)
 
 
 class SelfDrivingNode(Node):
@@ -58,6 +80,9 @@ class SelfDrivingNode(Node):
             SetPWMServoState, "ros_robot_controller/pwm_servo/set_state", 1
         )
         self.result_publisher = self.create_publisher(Image, "~/image_result", 1)
+        self.rgb_pub = self.create_publisher(
+            RGBStates, "/ros_robot_controller/set_rgb", 10
+        )
 
         self.create_service(
             Trigger, "~/enter", self.enter_srv_callback
@@ -89,13 +114,14 @@ class SelfDrivingNode(Node):
             self.send_request(self.start_yolov5_client, Trigger.Request())
         time.sleep(1)
 
-        if True:  # self.get_parameter('start').value:
-            self.start_delay_time = time.time()  # TODO 01 : 시작 시간 기록
-            self.display = True
-            self.enter_srv_callback(Trigger.Request(), Trigger.Response())
-            request = SetBool.Request()
-            request.data = True
-            self.set_running_srv_callback(request, SetBool.Response())
+        self.display = True
+        self.enter_srv_callback(Trigger.Request(), Trigger.Response())
+        self.create_subscription(
+            ButtonState, "/ros_robot_controller/button", self.button_callback, 1
+        )
+        self.get_logger().info(
+            "\033[1;32m%s\033[0m" % "버튼 대기 중 - 아무 버튼이나 클릭하면 시작"
+        )
 
         # self.park_action()
         threading.Thread(target=self.main, daemon=True).start()
@@ -115,8 +141,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.30,
-                "angular_z": -0.55,  # TODO : -0.713 -> -0.55 (count_turn>4 복원에 맞춰 회전량 줄임, 우회전 후 오른쪽 치우침 개선)
+                "linear_x": 0.375,  # TODO : 0.30→0.375 (좌0.5/우0.25 2:1 비율, track=0.185m 기준)
+                "angular_z": -1.35,  # TODO : -0.55→-1.35 (2:1 바퀴 비율 달성, 0.0925m×2=0.185m)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -159,6 +185,8 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
 
         self.count_crosswalk = 0
+        self.accel_ramp_active = False  # 정지 후 재출발 가속 구간 플래그
+        self.accel_ramp_start_time = 0  # 가속 구간 시작 시간
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
         self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
         self.crosswalk_distance = 0  # distance to the zebra crossing
@@ -193,6 +221,30 @@ class SelfDrivingNode(Node):
         self.pid.Kd = params["pid_d"]
         self.get_logger().info(f"Drive mode changed: {mode}")
 
+    def set_rgb(self, r, g, b):
+        msg = RGBStates()
+        msg.states = [
+            RGBState(index=1, red=r, green=g, blue=b),
+            RGBState(index=2, red=r, green=g, blue=b),
+        ]
+        self.rgb_pub.publish(msg)
+
+    def button_callback(self, msg):
+        if msg.state == 5 and not self.start:  # 클릭 이벤트, 아직 시작 전일 때만
+            self.get_logger().info(
+                "\033[1;32m%s\033[0m" % "버튼 입력 - 3초 후 주행 시작"
+            )
+            self.start_delay_time = time.time()
+            request = SetBool.Request()
+            request.data = True
+            self.set_running_srv_callback(request, SetBool.Response())
+        elif msg.state == 6 and self.start:  # 더블클릭, 주행 중일 때만
+            self.get_logger().info(
+                "\033[1;32m%s\033[0m" % "더블클릭 - 대기 상태로 초기화"
+            )
+            self.mecanum_pub.publish(Twist())  # 즉시 정지
+            self.param_init()  # 모든 상태 초기화 (start=False 포함)
+
     # TODO 02 : 교차로 우회전 동작 함수
     def turn_right_action(self):
         self.stop = True  # 주행 로직 잠시 멈춤
@@ -201,11 +253,27 @@ class SelfDrivingNode(Node):
         twist.linear.x = self.drive_params["turn_right"]["linear_x"]
         twist.angular.z = self.drive_params["turn_right"]["angular_z"]
         self.mecanum_pub.publish(twist)
-        time.sleep(1)  # 90도 회전 시간 (테스트 후 튜닝)
+
+        turn_start = time.time()
+        crosswalk_hit = False
+        while (
+            time.time() - turn_start < 1.0
+        ):  # TODO : 0.6→1.0초 ≈ 80도 (angular_z=-1.35 기준, 최소 70~80도 보장)
+            if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
+                crosswalk_hit = True
+                break
+            time.sleep(0.03)
 
         self.mecanum_pub.publish(Twist())  # 정지
         self.stop = False  # 주행 로직 재개
         self.turn_right = False  # 표지판 플래그 리셋
+        self.accel_ramp_active = True  # 우회전 후 재출발 가속 구간
+        self.accel_ramp_start_time = time.time()
+
+        if not crosswalk_hit:  # 정상 종료 시 횡단보도 재감지 방지
+            self.crosswalk_ignore = True
+            self.crosswalk_ignore_time = time.time()
+            self.pre_slow_down = False
 
     def get_node_state(self, request, response):
         response.success = True
@@ -330,8 +398,10 @@ class SelfDrivingNode(Node):
             if self.start:
                 # TODO 01 : 시작 딜레이를 가장 먼저 체크
                 if self.start_delay:
-                    if time.time() - self.start_delay_time > 3.0:
+                    if time.time() - self.start_delay_time > 0.5:
                         self.start_delay = False
+                        self.accel_ramp_active = True  # 출발 가속 구간 시작
+                        self.accel_ramp_start_time = time.time()
                         self.get_logger().info(
                             "\033[1;32m%s\033[0m" % "start_delay 해제 - 주행 시작!"
                         )
@@ -352,7 +422,9 @@ class SelfDrivingNode(Node):
                     f"crosswalk_distance: {self.crosswalk_distance}, crosswalk_ignore: {self.crosswalk_ignore}"
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
-                    if time.time() - self.crosswalk_ignore_time > 3.5:
+                    if (
+                        time.time() - self.crosswalk_ignore_time > 1.5
+                    ):  # TODO : 3.5→6.0→1.5 - 재출발 후 0.75m 이동하면 충분히 이탈, 다음 횡단보도 간격 1m 이내
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
@@ -380,14 +452,12 @@ class SelfDrivingNode(Node):
                         self.pre_slow_down = False
 
                 # deceleration processing
-                # TODO 00 : 교차로 인식 시 일단 정지
+                # TODO 00 : 교차로 인식 시 완전 정지
                 if self.start_slow_down:
                     if not self.stop:
-                        self.mecanum_pub.publish(
-                            Twist()
-                        )  # 횡단보도 감지하면 일단 무조건 정지
+                        self.mecanum_pub.publish(Twist())  # 횡단보도 감지하면 완전 정지
                         self.stop = True
-                        self.stop_time = time.time()  # 정지한 시간 기록
+                        self.stop_time = time.time()
                         self.count_turn = 0  # TODO 00 : 우회전 카운트 리셋
                         self.start_turn = False  # TODO 00 : 우회전 플래그 리셋
 
@@ -405,7 +475,7 @@ class SelfDrivingNode(Node):
                         ):
                             pass  # 빨간불이면 계속 대기
                         elif self.traffic_signs_status.class_name == "green":
-                            self.stop = False  # 초록불이면 출발
+                            self.stop = False
                             self.start_slow_down = False
                             self.crosswalk_distance = 0  # TODO 00 : 거리 초기화 → 추가
                             self.crosswalk_ignore = True  # TODO 00 : 무시 시작 → 추가
@@ -413,12 +483,13 @@ class SelfDrivingNode(Node):
                                 time.time()
                             )  # TODO 00 : 무시 시작 시간 → 추가
                             self.pre_slow_down = False
+                            self.accel_ramp_active = True  # 초록불 재출발 가속 구간
+                            self.accel_ramp_start_time = time.time()
 
                     else:
-                        # 신호등 없으면 1초 후 출발
                         if (
-                            time.time() - self.stop_time > 1.0
-                        ):  # TODO 00 숫자 변경 = 정지 시간 변경(x.0)
+                            time.time() - self.stop_time > 0.7
+                        ):  # TODO 00 숫자 변경 = 정지 시간 변경(x.0) 1.0→0.7
                             if self.turn_right:  # TODO 02 : 우회전 표지판 확인
                                 self.start_slow_down = False
                                 threading.Thread(
@@ -438,13 +509,14 @@ class SelfDrivingNode(Node):
                                     time.time()
                                 )  # TODO 00 : 무시 시작 시간 → 추가
                                 self.pre_slow_down = False
+                                self.accel_ramp_active = (
+                                    True  # 횡단보도 재출발 가속 구간
+                                )
+                                self.accel_ramp_start_time = time.time()
 
                     if not self.stop:
-                        self.set_drive_mode("slow_down")  # TODO 01
-                        twist.linear.x = self.drive_params["slow_down"][
-                            "linear_x"
-                        ]  # TODO 01
-                        # twist.linear.x = self.slow_down_speed
+                        self.set_drive_mode("slow_down")
+                        twist.linear.x = self.drive_params["slow_down"]["linear_x"]
 
                 else:
                     self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
@@ -488,13 +560,14 @@ class SelfDrivingNode(Node):
                 self.get_logger().info(
                     f"[DEBUG] stop:{self.stop}, start_turn:{self.start_turn}, count_turn:{self.count_turn}, start_slow_down:{self.start_slow_down}"
                 )  # TODO : 우회전 안되는 원인 추적용 → 추가
-                if not self.stop and not self.start_delay:  # TODO 01 : 딜레이 조건 추가
+                if not self.start_delay and (
+                    not self.stop or (self.start_slow_down and self.turn_right)
+                ):  # TODO : 크리핑(stop=False) 또는 횡단보도정지+우회전표지판 조합일 때만 count_turn 허용 - turn_right_action 실행 중(start_slow_down=False)엔 차단
                     if (
                         len(center_x) >= 5
                         and center_x[0] != -1
-                        and center_x[2]
-                        == -1  # Box3도 -1이어야 진짜 코너 (직진 중 Box4,5만 죽는 경우 제외)
-                        and center_x[3] == -1
+                        and center_x[3]
+                        == -1  # TODO : Box3 조건 제거 - 코너에서 Box3이 계속 살아있어 count 미도달 → Box4=Box5=-1만 요구하도록 완화
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_ignore_time > 1.8
                     ):
@@ -521,6 +594,8 @@ class SelfDrivingNode(Node):
                             ]  # TODO 01 : 코너 속도 0.15 적용
                         else:
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
+                    elif self.stop:  # 완전 정지 중 - count_turn만 허용, PID 명령 차단
+                        self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
                             self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230, 차량이 조금 더 오른쪽으로 가도록 미세 조정)
@@ -558,6 +633,14 @@ class SelfDrivingNode(Node):
                         twist.linear.x = (
                             self.slow_down_speed
                         )  # 0.05: 횡단보도 접근 감속 (복원)
+                    if self.accel_ramp_active and not self.start_turn:
+                        elapsed = time.time() - self.accel_ramp_start_time
+                        if elapsed >= 0.15:
+                            self.accel_ramp_active = False
+                        else:
+                            twist.linear.x = (elapsed / 0.15) * self.drive_params[
+                                "straight"
+                            ]["linear_x"]
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -603,7 +686,40 @@ class SelfDrivingNode(Node):
                             label="{}:{:.2f}".format(class_name, cls_conf),
                         )
 
+                # RGB 등화 제어 (LED1: 정지등/주행등, LED2: 방향지시등)
+                led1 = (255, 0, 0) if (self.stop or self.pre_slow_down) else (0, 255, 0)
+                if self.turn_right or self.start_turn:
+                    blink_on = (time.time() % 0.5) < 0.25
+                    led2 = (255, 200, 0) if blink_on else (0, 0, 0)
+                else:
+                    led2 = led1  # 방향지시 없을 때 LED2도 LED1과 동일
+                msg = RGBStates()
+                msg.states = [
+                    RGBState(index=1, red=led1[0], green=led1[1], blue=led1[2]),
+                    RGBState(index=2, red=led2[0], green=led2[1], blue=led2[2]),
+                ]
+                self.rgb_pub.publish(msg)
+
+                # GPIO 전구 제어
+                is_stop = self.stop or self.pre_slow_down
+                GPIO.output(PIN_GREEN, LED_OFF if is_stop else LED_ON)
+                GPIO.output(PIN_RED, LED_ON if is_stop else LED_OFF)
+                if self.turn_right or self.start_turn:
+                    gpio_blink = (time.time() % 0.6) < 0.3
+                    GPIO.output(PIN_YELLOW_LEFT, LED_ON if gpio_blink else LED_OFF)
+                    GPIO.output(PIN_YELLOW_RIGHT, LED_ON if gpio_blink else LED_OFF)
+                else:
+                    GPIO.output(PIN_YELLOW_LEFT, LED_OFF)
+                    GPIO.output(PIN_YELLOW_RIGHT, LED_OFF)
+
             else:
+                blink_on = (time.time() % 0.6) < 0.3  # 대기 중 교대 점멸 (50% 듀티)
+                msg = RGBStates()
+                msg.states = [
+                    RGBState(index=1, red=255 if blink_on else 0, green=0, blue=0),
+                    RGBState(index=2, red=0 if blink_on else 255, green=0, blue=0),
+                ]
+                self.rgb_pub.publish(msg)
                 time.sleep(0.01)
 
             bgr_image = cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR)
@@ -662,6 +778,11 @@ class SelfDrivingNode(Node):
                                 f"crosswalk box_height: {box_height}, box_width: {box_width}"
                             )  # TODO 00 : 높이/너비 로그 → 추가
                 elif class_name == "right":  # obtain the right turning sign
+                    sign_h = abs(i.box[1] - i.box[3])
+                    sign_w = abs(i.box[0] - i.box[2])
+                    self.get_logger().info(
+                        f"[right raw] box_height: {sign_h}, box_width: {sign_w}"
+                    )
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
@@ -670,17 +791,24 @@ class SelfDrivingNode(Node):
                         self.turn_right = True
                         self.count_right = 0
                 elif class_name == "park":
-                    box_area = abs(i.box[0] - i.box[2]) * abs(
-                        i.box[1] - i.box[3]
-                    )  # TODO 00 : 박스 크기 계산
+                    sign_h = abs(i.box[1] - i.box[3])
+                    sign_w = abs(i.box[0] - i.box[2])
+                    box_area = sign_w * sign_h  # TODO 00 : 박스 크기 계산
                     self.get_logger().info(
-                        f"[park raw] box_area: {box_area}"
+                        f"[park raw] box_height: {sign_h}, box_width: {sign_w}, box_area: {box_area}"
                     )  # TODO : park 오인식 추적용 → 추가
-                    if box_area > 1000:  # TODO 00 : 오인식 방지
+                    if (
+                        box_area > 5000
+                    ):  # TODO 00 : 오인식 방지 1000→5000 (원거리 오인식 차단, 약 70×70px 이상만 허용)
                         self.park_x = center[0]
                 elif (
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
+                    sign_h = abs(i.box[1] - i.box[3])
+                    sign_w = abs(i.box[0] - i.box[2])
+                    self.get_logger().info(
+                        f"[{class_name} raw] box_height: {sign_h}, box_width: {sign_w}"
+                    )
                     self.traffic_signs_status = i
                     found_traffic_light = True
 
