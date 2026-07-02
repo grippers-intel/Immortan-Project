@@ -700,11 +700,11 @@ class SelfDrivingNode(Node):
                     if (
                         self.pre_slow_down
                         and not self.start_turn
-                        and self.crosswalk_box_height > 13
+                        and self.crosswalk_box_height > 11
                     ):
                         twist.linear.x = (
                             self.slow_down_speed
-                        )  # cw_h>13일 때 감속: 정지(15) 직전만 감속, 너무 이른 감속 방지 (10→13)
+                        )  # cw_h>11일 때 감속: 정지(15) 직전만 감속, 너무 이른 감속 방지 (10→13→11)
                     if self.accel_ramp_active and not self.start_turn:
                         elapsed = time.time() - self.accel_ramp_start_time
                         if elapsed >= 0.15:
