@@ -143,7 +143,7 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.35,  # TODO : 0.45→0.2→0.25→0.35 (양쪽 바퀴 다 상향, 우바퀴 데드밴드 탈출)
+                "linear_x": 0.4,  # TODO : 0.45→0.2→0.25→0.35→0.4 (좌바퀴 더 상향, 좌 0.54/우 0.26)
                 "angular_z": -1.5,  # TODO : ...→-1.9→-1.5 (좌 0.49/우 0.21, 우바퀴 더 올리고 회전각 축소)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
@@ -445,8 +445,8 @@ class SelfDrivingNode(Node):
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if (
-                        time.time() - self.crosswalk_ignore_time > 1.5
-                    ):  # TODO : 3.5→6.0→1.5→0.65→0.8→1.2→1.5 - 정지 후 같은 횡단보도 재정지 방지 (1.5s≈75cm@0.5m/s)
+                        time.time() - self.crosswalk_ignore_time > 1.7
+                    ):  # TODO : ...→1.2→1.5→2.0→1.7 - 정지 후 같은 횡단보도 재정지 방지 (1.7s≈85cm@0.5m/s)
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
