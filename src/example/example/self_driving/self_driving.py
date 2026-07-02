@@ -195,6 +195,12 @@ class SelfDrivingNode(Node):
         # [LED] '지금 우회전 중인가' 표시용 플래그(깜빡이 구동). start_turn만 쓰면 확정(count>5)까지
         #   ~0.5초 늦어 깜빡이가 '턴이 끝난 뒤' 켜짐 → lane_x>임계(하드턴 시작 즉시)도 함께 본다. 매 프레임 갱신.
         self.turning_right = False
+        # [코너 카운트] 물리 코너 번호(1,2,3...). 코너 직후 감속(corner_speed)을 특정 코너에서만 생략하려고 셈.
+        #   start_turn False→True 전환마다 세되, 같은 코너 내 재트리거는 디바운스로 무시(코너는 로그상 ~9초 간격).
+        self.corner_count = 0
+        self.last_corner_time = 0.0
+        self.corner_debounce = 4.0     # 이 시간(초) 이내 재트리거는 같은 코너로 간주(코너 간격 <9초라 안전)
+        self.no_slowdown_corner = 2    # 이 번호의 코너 직후엔 감속 생략(횡단보도가 멀어 순항 유지). 0=항상 감속
 
         self.count_right = 0
         self.count_right_miss = 0
@@ -243,7 +249,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_min_aspect = 2.0     # [종횡비 필터] 박스 가로/세로 비가 이 값 이상일 때만 인정.
                                             #   실제 횡단보도는 가로로 긴 줄무늬(가로≫세로)라 통과하고, 바닥 까진 자국은
                                             #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
-        self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
+        self.crosswalk_stop_duration = 1.0  # 정지 유지 시간(초). (2.0→1.0: 모든 횡단보도/신호 대기 1초로 단축)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2 # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
@@ -877,6 +883,11 @@ class SelfDrivingNode(Node):
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
+                            # [코너 카운트] 디바운스 지나면 새 물리 코너로 번호 증가(같은 코너 재트리거는 무시)
+                            if time.time() - self.last_corner_time > self.corner_debounce:
+                                self.corner_count += 1
+                                self.get_logger().info('\033[1;36m=== CORNER #%d ===\033[0m' % self.corner_count)
+                            self.last_corner_time = time.time()
                         if self.machine_type != 'MentorPi_Acker':
                             twist.angular.z = self.turn_angular_z  # [튜닝] 고정 회전 각속도 (param_init의 turn_angular_z)
                         else:
@@ -903,7 +914,8 @@ class SelfDrivingNode(Node):
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
                     # [수정] 회전 '직후 복귀' 구간에서만 감속(코너 직후 갑툭튀 횡단보도 대비).
                     #   실제 급회전 중(lane_x>threshold)엔 감속 안 함 — 감속하면 반경이 좁아져 과회전/불안정.
-                    if self.start_turn and lane_x <= self.turn_threshold:
+                    #   [추가] no_slowdown_corner 번째 코너는 감속 생략 — 그 코너 뒤 횡단보도가 멀어 순항 유지.
+                    if self.start_turn and lane_x <= self.turn_threshold and self.corner_count != self.no_slowdown_corner:
                         twist.linear.x = self.corner_speed
                     # [진단 로그] 차선추종/코너 블록이 실제로 로봇에 내보내는 속도. 코너 중 lin이 0으로
                     #   떨어지거나 ang이 안 나가면 여기서 잡힘. (이 로그가 안 찍히면 stop 때문에 블록이 스킵된 것)
