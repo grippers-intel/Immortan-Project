@@ -186,6 +186,9 @@ class SelfDrivingNode(Node):
         self.start_park = False  # start parking sign
 
         self.count_crosswalk = 0
+        self.crosswalk_total_count = (
+            0  # 총 횡단보도 감지 횟수 (홀수=정지, 짝수=통과, 9=주차)
+        )
         self.accel_ramp_active = False  # 정지 후 재출발 가속 구간 플래그
         self.accel_ramp_start_time = 0  # 가속 구간 시작 시간
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
@@ -441,20 +444,42 @@ class SelfDrivingNode(Node):
                     and not self.crosswalk_ignore
                     and not self.start_turn  # 우회전 중 횡단보도 감지로 인한 회전 중단 방지
                 ):
-                    self.pre_slow_down = (
-                        True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
-                    )
-                    if (
-                        self.crosswalk_box_height > 50
-                    ):  # 30→60→50: 60은 box_height=83까지 기다려 너무 늦음, 50은 box_height=56에서 트리거
-                        self.count_crosswalk += 1
-                        if self.count_crosswalk >= 2:
+                    if not self.pre_slow_down:
+                        # 새 횡단보도 최초 감지 - 번호 부여
+                        self.crosswalk_total_count += 1
+                        self.get_logger().info(
+                            f"\033[1;36m횡단보도 #{self.crosswalk_total_count} 감지\033[0m"
+                        )
+                        if self.crosswalk_total_count % 2 == 0:
+                            # 짝수 (2,4,6,8번) → 즉시 통과 (정지 없음)
+                            self.get_logger().info(
+                                "\033[1;36m짝수 횡단보도 → 통과\033[0m"
+                            )
+                            self.crosswalk_ignore = True
+                            self.crosswalk_ignore_time = time.time()
                             self.count_crosswalk = 0
-                            self.start_slow_down = True
-                            self.pre_slow_down = False
-                            self.count_slow_down = time.time()
-                    else:  # 원거리 → 아직 count 안함, 0.05m/s로만 감속 유지
-                        self.count_crosswalk = 0
+                        elif self.crosswalk_total_count == 9:
+                            # 9번 횡단보도 → 주차 (park_x 감지 시 park_action 실행, 기존 로직)
+                            self.get_logger().info(
+                                "\033[1;35m%s\033[0m" % "9번 횡단보도 → 주차 준비"
+                            )
+                            self.pre_slow_down = True
+                        else:
+                            # 홀수 (1,3,5,7번) → 정지 로직 진입
+                            self.pre_slow_down = True
+
+                    if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
+                        if (
+                            self.crosswalk_box_height > 50
+                        ):  # 30→60→50: 60은 box_height=83까지 기다려 너무 늦음, 50은 box_height=56에서 트리거
+                            self.count_crosswalk += 1
+                            if self.count_crosswalk >= 2:
+                                self.count_crosswalk = 0
+                                self.start_slow_down = True
+                                self.pre_slow_down = False
+                                self.count_slow_down = time.time()
+                        else:  # 원거리 → 아직 count 안함, 0.05m/s로만 감속 유지
+                            self.count_crosswalk = 0
                 else:
                     if not self.start_slow_down:
                         self.count_crosswalk = 0
