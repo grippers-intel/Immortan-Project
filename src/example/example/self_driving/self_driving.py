@@ -230,7 +230,9 @@ class SelfDrivingNode(Node):
         self.rgb_pub.publish(msg)
 
     def button_callback(self, msg):
-        if msg.state == 5 and not self.start:  # 클릭 이벤트, 아직 시작 전일 때만
+        if (
+            msg.state in (1, 5) and not self.start
+        ):  # 1=누르는 순간, 5=클릭확정 (둘 다 잡기)
             self.get_logger().info(
                 "\033[1;32m%s\033[0m" % "버튼 입력 - 3초 후 주행 시작"
             )
