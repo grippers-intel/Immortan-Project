@@ -572,8 +572,8 @@ class SelfDrivingNode(Node):
                     continue
 
             result_image = image.copy()
-            # if self.start:
-            #     self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+            if self.start:
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
             else:
                 self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
