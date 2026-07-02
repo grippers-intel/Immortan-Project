@@ -17,19 +17,23 @@
 # =============================================================================
 #
 # 코스 정지 지점 (crosswalk_stage 순서):
-#   Stage 0 (S1): 하단 횡단보도 — 신호등 있음 → green 신호 후 출발
+#   Stage 0 (S1): 하단 횡단보도 — 신호등 없음 → 2초 정지
 #   Stage 1 (S2): 좌측 횡단보도 — 신호등 없음 → 2초 정지
-#   Stage 2 (S3): 상단 횡단보도 — 신호등 있음 → green 신호 후 출발
+#   Stage 2 (S3): 상단 횡단보도 — 신호등 있음 → green 신호 후 출발  ★ PDF 코스맵 기준
 #   Stage 3 (S4): 우측 횡단보도 — 신호등 없음 → 2초 정지 후 우회전
 #
 # ★ 표시 항목은 실측 후 조정 필요
+# 시운행(버튼 없음): ros2 launch example self_driving.launch.py test_mode:=true
 # =============================================================================
 
+# pylint: disable=c-extension-no-member
 import os
-import cv2
-import time
 import queue
 import threading
+import time
+from math import atan2, pi
+
+import cv2
 import numpy as np
 
 import rclpy
@@ -37,21 +41,20 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from math import atan2, pi
 from cv_bridge import CvBridge
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 from std_msgs.msg import String
 from std_srvs.srv import SetBool, Trigger
-from interfaces.msg import ObjectsInfo
-from ros_robot_controller_msgs.msg import ButtonState
+from interfaces.msg import ObjectsInfo  # type: ignore[import-untyped]  # pylint: disable=import-error
+from ros_robot_controller_msgs.msg import ButtonState  # type: ignore[import-untyped]  # pylint: disable=import-error
 
-import sdk.pid as pid
-import sdk.fps as fps
-import sdk.common as common
-from sdk.common import colors, plot_one_box
-from example.self_driving import lane_detect
+import sdk.pid as pid  # type: ignore[import-untyped]  # pylint: disable=import-error
+import sdk.fps as fps  # type: ignore[import-untyped]  # pylint: disable=import-error
+import sdk.common as common  # type: ignore[import-untyped]  # pylint: disable=import-error
+from sdk.common import colors, plot_one_box  # type: ignore[import-untyped]  # pylint: disable=import-error
+from example.self_driving import lane_detect  # type: ignore[import-untyped]  # pylint: disable=import-error
 
 
 # =============================================================================
@@ -91,23 +94,27 @@ PARK_STOP_Y = 350  # park 표지판 중심 Y 임계값 (px)  ★
 PARK_TIMEOUT = 5.0  # 주차 직진 최대 시간 (초, 안전장치)
 
 # 감지 임계값
-CROSSWALK_NEAR_Y = 200  # crosswalk Y픽셀 임계 (300→200: 더 멀리서 감지)
-CROSSWALK_COUNT = 3  # 오탐 방지: 3프레임 연속 확인 (2→3)
-ARROW_COUNT = 3  # 오탐 방지: 3프레임 연속 확인 (2→3)
+CROSSWALK_NEAR_Y = 320  # crosswalk Y픽셀 임계 ★ (200→320: 더 가까이 와야 반응)
+CROSSWALK_COUNT = 3  # 오탐 방지: 3프레임 연속 확인
+ARROW_COUNT = 5  # 오탐 방지: 5프레임 연속 확인 ★ (3→5: 원거리 오감지 방지)
 PARK_COUNT = 6  # ★ 오감지 방지: 6프레임 연속 확인
-TRAFFIC_AREA_MIN = 200  # 신호등 최소 감지 면적 (px²) (400→200)
-PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²) (400→200)
-ARROW_AREA_MIN = 200  # 화살표 최소 감지 면적 (px²) (400→200)
+TRAFFIC_AREA_MIN = 200  # 신호등 최소 감지 면적 (px²)
+PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²)
+ARROW_AREA_MIN = 2000  # 화살표 최소 감지 면적 (px²) ★ (200→2000: 근거리만 반응)
 
 # 급커브 처리
-SHARP_TURN_X = 140  # 이 값 초과 시 급커브 판정
-SHARP_TURN_Z = -1.2  # 급커브 조향각  ★ (이전 -0.8 → -1.2 강화)
-SHARP_TURN_TIME = 0.3  # 급커브 유지 시간 (초)  ★ (이전 0.2 → 0.3)
-SHARP_TURN_COUNT = 2  # 급커브 진입 연속 프레임
+SHARP_TURN_X = (
+    230  # 이 값 초과 시 급커브 판정 ★ (140→230: SetPoint+100px 이상 벗어날 때만)
+)
+SHARP_TURN_Z = -0.8  # 급커브 조향각  ★ (-1.2→-0.8: 과잉 우회전 방지)
+SHARP_TURN_TIME = 0.2  # 급커브 유지 시간 (초)  ★ (0.3→0.2)
+SHARP_TURN_COUNT = 3  # 급커브 진입 연속 프레임 (2→3: 오탐 방지)
 
 # 코스 횡단보도 설정
 MAX_CROSSWALK_STAGE = 4  # S1~S4 총 4회
-TRAFFIC_STAGE = {0, 2}  # 신호등 있는 횡단보도: S1(stage=0), S3(stage=2)
+TRAFFIC_STAGE = {
+    2
+}  # 신호등 있는 횡단보도: S3(stage=2, 상단)  ★ PDF 코스맵 기준 — 실측 후 S1 필요 시 {0, 2}로 복원
 
 
 # =============================================================================
@@ -154,6 +161,7 @@ class SelfDrivingNode(Node):
         self._arrow_direction = None
         self._traffic_color = None
         self._park_triggered = False
+        self._park_side_start = None  # 주차 2단계 시작 시각 (독립 타이머)
 
         # ── 급커브 상태 ───────────────────────────────────────────────────────
         self._cnt_turn = 0
@@ -166,6 +174,12 @@ class SelfDrivingNode(Node):
         self._turn_start_yaw = 0.0
 
         self.objects_info = []
+
+        # ── 횡단보도 리셋 타이머 (중복 방지 — 이전 타이머 취소 후 재시작) ────
+        self._cw_reset_timer = None
+
+        # ── 구독 중복 방지 플래그 ─────────────────────────────────────────────
+        self._entered = False
 
         # ── 퍼블리셔 ──────────────────────────────────────────────────────────
         self.cmd_vel_pub = self.create_publisher(Twist, "/controller/cmd_vel", 1)
@@ -235,13 +249,15 @@ class SelfDrivingNode(Node):
     # =========================================================================
     def _enter_cb(self, request, response):
         with self.lock:
-            self.create_subscription(
-                Image, "/ascamera/camera_publisher/rgb0/image", self._image_cb, 1
-            )
-            self.create_subscription(
-                ObjectsInfo, "/yolov5_ros2/object_detect", self._objects_cb, 1
-            )
-            self.cmd_vel_pub.publish(Twist())
+            if not self._entered:
+                self._entered = True
+                self.create_subscription(
+                    Image, "/ascamera/camera_publisher/rgb0/image", self._image_cb, 1
+                )
+                self.create_subscription(
+                    ObjectsInfo, "/yolov5_ros2/object_detect", self._objects_cb, 1
+                )
+                self.cmd_vel_pub.publish(Twist())
         response.success = True
         return response
 
@@ -318,15 +334,28 @@ class SelfDrivingNode(Node):
 
         if new_state == State.LINE_FOLLOW:
             self._led("green_on")
-        elif new_state in (State.CROSSWALK_STOP, State.TRAFFIC_LIGHT, State.WAIT_START):
+            self._cnt_crosswalk = 0  # INTERSECTION 직후 횡단보도 오감지 방지
+            self._cnt_turn = 0  # INTERSECTION 직후 SHARP_TURN 재발동 방지
+            self._is_turning = False
+        elif new_state in (State.CROSSWALK_STOP, State.WAIT_START):
+            self._led("red_on")
+        elif new_state == State.TRAFFIC_LIGHT:
+            self._traffic_color = None  # 진입 시 초기화 — LINE_FOLLOW 잔류값 방지
             self._led("red_on")
         elif new_state == State.ARROW_SIGNAL:
-            self._led("yellow_blink")
+            self._led("red_on")  # 정지 중 → 빨간 (규칙 4)
+            self._led("yellow_blink")  # 방향 예고 점멸 (규칙 7)
         elif new_state == State.INTERSECTION:
-            self._turn_start_yaw = self.degree  # 우회전 시작 각도 저장
+            self._led("green_on")  # 교차로 진입 → 이동 중 (규칙 4)
+            self._turn_start_yaw = self.degree
+        elif new_state == State.PARKING:
+            self._led("green_on")  # 주차 접근 → 이동 중 (규칙 4)
+            self._cnt_turn = 0
+            self._is_turning = False
         elif new_state == State.DONE:
+            self.is_running = False  # _main_loop 종료 트리거
             self._stop()
-            self._led("all_blink")
+            self._led("all_blink")  # 주차 완료 → 전체 점멸 (규칙 11)
 
     # =========================================================================
     # 메인 FSM 루프
@@ -443,7 +472,7 @@ class SelfDrivingNode(Node):
     # =========================================================================
     # 상태: CROSSWALK_STOP — 신호등 없는 횡단보도 (S2, S4)
     # =========================================================================
-    def _state_crosswalk_stop(self, image, result_image):
+    def _state_crosswalk_stop(self, _image, result_image):
         """2초 정지 → 1초 맹목 전진(횡단보도 탈출) → LINE_FOLLOW"""
         elapsed = self._elapsed()
         if elapsed < CROSSWALK_WAIT:
@@ -457,13 +486,13 @@ class SelfDrivingNode(Node):
                 f"[CW_STOP] 탈출 완료 → Stage {self.crosswalk_stage}"
             )
             self._transition(State.LINE_FOLLOW)
-            threading.Thread(target=self._reset_crosswalk_flag, daemon=True).start()
+            self._schedule_crosswalk_reset()
         return result_image
 
     # =========================================================================
     # 상태: TRAFFIC_LIGHT — 신호등 있는 횡단보도 (S3)
     # =========================================================================
-    def _state_traffic_light(self, image, result_image):
+    def _state_traffic_light(self, _image, result_image):
         """
         정지 유지 → green 신호 감지 시 출발.
         TRAFFIC_TIMEOUT 초과 시 강제 출발.
@@ -480,25 +509,32 @@ class SelfDrivingNode(Node):
                 f"[TRAFFIC] 녹색 신호 → Stage {self.crosswalk_stage}"
             )
             self._transition(State.LINE_FOLLOW)
-            threading.Thread(target=self._reset_crosswalk_flag, daemon=True).start()
+            self._schedule_crosswalk_reset()
         elif self._elapsed() > TRAFFIC_TIMEOUT:
             self.get_logger().warn("[TRAFFIC] 타임아웃 → 강제 출발")
             self.crosswalk_stage += 1
             self._crosswalk_done = True
             self._transition(State.LINE_FOLLOW)
-            threading.Thread(target=self._reset_crosswalk_flag, daemon=True).start()
+            self._schedule_crosswalk_reset()
 
         return result_image
 
-    def _reset_crosswalk_flag(self):
-        """5초 후 crosswalk_done 해제 → 다음 횡단보도 처리 가능"""
-        time.sleep(5.0)
+    def _schedule_crosswalk_reset(self):
+        """이전 타이머 취소 후 2초 타이머 재시작 — 중복 스레드로 인한 조기 해제 방지"""
+        if self._cw_reset_timer is not None:
+            self._cw_reset_timer.cancel()
+        self._cw_reset_timer = threading.Timer(2.0, self._do_crosswalk_reset)
+        self._cw_reset_timer.daemon = True
+        self._cw_reset_timer.start()
+
+    def _do_crosswalk_reset(self):
+        """2초 후 crosswalk_done 해제 → 다음 횡단보도 처리 가능"""
         self._crosswalk_done = False
 
     # =========================================================================
     # 상태: ARROW_SIGNAL — 황색 LED 점멸 (규칙 7)
     # =========================================================================
-    def _state_arrow_signal(self, image, result_image):
+    def _state_arrow_signal(self, _image, result_image):
         if self._elapsed() < ARROW_BLINK_TIME:
             self._stop()
         else:
@@ -523,18 +559,29 @@ class SelfDrivingNode(Node):
             lane_x = -1.0
 
         if self._arrow_direction == "go":
-            self._do_line_follow(lane_x, lane_angle, NORMAL_SPEED)
-            if lane_x >= 0:
+            if elapsed >= TURN_TIMEOUT + 3.0:
+                # 최대 탐색 시간 초과 → 강제 전환
+                self.get_logger().warn("[INTERSECTION] go 타임아웃 → 강제 전환")
                 self._transition(State.LINE_FOLLOW)
+            elif lane_x >= 0 and elapsed >= 1.0:
+                # 1초 이상 직진 후 차선 발견 → 정상 복귀
+                self._transition(State.LINE_FOLLOW)
+            else:
+                # 차선 없어도 직진 유지 (교차로 통과 중)
+                self._move(linear_x=NORMAL_SPEED)
 
         elif self._arrow_direction == "right":
             turned = self._angle_diff_deg(self.degree, self._turn_start_yaw)
             if turned < TURN_ANGLE_DEG and elapsed < TURN_TIMEOUT:
                 self._move(linear_x=TURN_SPEED, angular_z=-TURN_ANGULAR)
+            elif elapsed >= TURN_TIMEOUT + 3.0:
+                # 회전 완료 후 3초 내 차선 미발견 → 강제 전환
+                self.get_logger().warn("[INTERSECTION] 차선 탐색 타임아웃 → 강제 전환")
+                self._transition(State.LINE_FOLLOW)
             else:
                 if elapsed >= TURN_TIMEOUT:
                     self.get_logger().warn(
-                        f"[INTERSECTION] 오도메트리 타임아웃 ({turned:.1f}°) → 강제 전환"
+                        f"[INTERSECTION] 오도메트리 타임아웃 ({turned:.1f}°) → 차선 탐색 중"
                     )
                 if lane_x >= 0:
                     self._transition(State.LINE_FOLLOW)
@@ -564,19 +611,28 @@ class SelfDrivingNode(Node):
             lane_x = -1.0
 
         # 1단계: 표지판까지 직진 (park_cy 기반 + 타임아웃)
-        if park_cy < PARK_STOP_Y and elapsed < PARK_TIMEOUT:
+        # _park_side_start가 None일 때만 1단계 — 2단계 진입 후에는 되돌아오지 않음
+        if (
+            self._park_side_start is None
+            and park_cy < PARK_STOP_Y
+            and elapsed < PARK_TIMEOUT
+        ):
             self._do_line_follow(lane_x, lane_angle, PARK_SPEED)
 
-        # 2단계: 우측 수직이동
-        elif elapsed < PARK_TIMEOUT + PARK_SIDE_TIME:
-            # ROS REP-103: linear.y 양수=좌측, 음수=우측 (제조사 원본 코드 기준 일치)
-            self._move(linear_x=0.0, linear_y=-PARK_SIDE_SPEED, angular_z=0.0)
-
-        # 3단계: 정지 → DONE
+        # 2단계: 우측 수직이동 — 독립 타이머로 항상 PARK_SIDE_TIME 동안 이동
         else:
-            self._stop()
-            self.get_logger().info("[PARKING] 주차 완료 → DONE")
-            self._transition(State.DONE)
+            if self._park_side_start is None:
+                self._park_side_start = time.time()
+                self.get_logger().info("[PARKING] 2단계: 우측 이동 시작")
+            side_elapsed = time.time() - self._park_side_start
+            if side_elapsed < PARK_SIDE_TIME:
+                # ROS REP-103: linear.y 음수=우측
+                self._move(linear_x=0.0, linear_y=-PARK_SIDE_SPEED, angular_z=0.0)
+            else:
+                # 3단계: 정지 → DONE
+                self._stop()
+                self.get_logger().info("[PARKING] 주차 완료 → DONE")
+                self._transition(State.DONE)
 
         return result_image
 
@@ -606,11 +662,11 @@ class SelfDrivingNode(Node):
         # 급커브 처리
         if self._is_turning:
             elapsed_turn = time.time() - self._turn_start_time
-            if elapsed_turn > SHARP_TURN_TIME:  # ✅ 수정 4: 0.2 → 0.3초
+            if elapsed_turn > SHARP_TURN_TIME:
                 self._is_turning = False
             else:
                 twist.linear.x = float(SLOW_SPEED)
-                twist.angular.z = SHARP_TURN_Z  # ✅ 수정 4: -0.8 → -1.2
+                twist.angular.z = SHARP_TURN_Z
                 self.cmd_vel_pub.publish(twist)
                 return
 
@@ -644,7 +700,11 @@ class SelfDrivingNode(Node):
                 result["park_cy"] = max(result["park_cy"], cy)
 
             elif name == "crosswalk":
-                result["crosswalk_y"] = max(result["crosswalk_y"], cy)
+                bh = abs(obj.box[3] - obj.box[1])
+                bw = abs(obj.box[2] - obj.box[0])
+                # 실제 횡단보도는 가로>>세로: 너비>150, 너비>2×높이 (정사각형 오인식 차단)
+                if 10 < bh < 180 and bw > 150 and bw > 2 * bh:
+                    result["crosswalk_y"] = max(result["crosswalk_y"], cy)
 
             elif name in ("red", "green") and area > TRAFFIC_AREA_MIN:
                 result["traffic"] = name
@@ -691,6 +751,8 @@ def main():
     finally:
         node.shutdown()
         node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
