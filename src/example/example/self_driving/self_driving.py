@@ -200,7 +200,8 @@ class SelfDrivingNode(Node):
         self.corner_count = 0
         self.last_corner_time = 0.0
         self.corner_debounce = 4.0     # 이 시간(초) 이내 재트리거는 같은 코너로 간주(코너 간격 <9초라 안전)
-        self.no_slowdown_corner = 2    # 이 번호의 코너 직후엔 감속 생략(횡단보도가 멀어 순항 유지). 0=항상 감속
+        self.no_slowdown_corner = 0    # 이 번호의 코너 직후엔 감속 생략(0=항상 감속). [복원] 2번 코너도 횡단보도가
+                                       #   코너 때문에 cw≈294로 늦게 검출돼 풀속으론 못 멈추고 넘어감 → 2→0(모든 코너 감속).
 
         self.count_right = 0
         self.count_right_miss = 0
