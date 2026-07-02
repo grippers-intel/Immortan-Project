@@ -145,7 +145,7 @@ class SelfDrivingNode(Node):
         self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
         self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.5    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
+        self.park_standoff_fwd = 0.7    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
                                         #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
         self.park_standoff_right = 0.15 # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         self.odom_x = 0.0
