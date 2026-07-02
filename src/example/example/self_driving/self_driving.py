@@ -94,7 +94,10 @@ ARROW_BLINK_TIME = 1.5  # 황색 LED 점멸 지속 시간 (초)
 TRAFFIC_TIMEOUT = 15.0  # 신호등 최대 대기 시간 (초)
 
 PARK_SIDE_TIME = 2.5  # 주차 수직이동 지속 시간 (초)  ★ (이전팀 0.7m 기준 참고)
-PARK_STOP_Y = 350  # park 표지판 중심 Y 임계값 (px)  ★
+# 주차 정지: cy 기준(구 PARK_STOP_Y=350)은 라벨 실측상 도달 불가 — park 표지판 cy는
+# ~215에 고정되고 접근할수록 화면 위로 이동. 접근 시 커지는 bbox 면적 기준으로 변경.
+# 라벨 분포(640px 기준): p50=360, p95=864, max=1200
+PARK_STOP_AREA = 800  # park 표지판 정지 면적 임계값 (px²)  ★
 PARK_TIMEOUT = 5.0  # 주차 직진 최대 시간 (초, 안전장치)
 
 # 감지 임계값
@@ -109,12 +112,14 @@ ARROW_COUNT = (
     3  # 오탐 방지: 3프레임 연속 확인 ★ (5→3: 우회전 표지판이 화면에 짧게만 노출됨)
 )
 PARK_COUNT = 6  # ★ 오감지 방지: 6프레임 연속 확인
-TRAFFIC_AREA_MIN = 200  # 신호등 최소 감지 면적 (px²)
-PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²)
-ARROW_AREA_MIN_GO = (
-    2000  # 직진 표지판 최소 감지 면적 (px²) — 도로 중앙 정면이라 크게 보임
-)
-ARROW_AREA_MIN_RIGHT = 500  # 우회전 표지판 최소 감지 면적 (px²) ★ (2000→500: 도로 옆에 위치해 작고 짧게 보임 → 완화)
+# 라벨 실측 분포 기반 재조정 (annotate/ 데이터셋 693박스 분석, 640px 기준):
+#   red/green: p50≈175, 구 임계 200은 63%를 거부 → 100 (p25≈120, 통과율 ~75%)
+#   go: p50=496, max=2380, 구 임계 2000은 95%를 거부 → 600
+#   right: min=352, p25=456, p50=754 → 450 (통과율 ~75%)
+TRAFFIC_AREA_MIN = 100  # 신호등 최소 감지 면적 (px²)  ★ (200→100)
+PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²) — 라벨 min=273, 전체 통과 확인
+ARROW_AREA_MIN_GO = 600  # 직진 표지판 최소 감지 면적 (px²)  ★ (2000→600)
+ARROW_AREA_MIN_RIGHT = 450  # 우회전 표지판 최소 감지 면적 (px²)  ★ (500→450)
 
 # 급커브 처리
 SHARP_TURN_X = (
@@ -641,13 +646,14 @@ class SelfDrivingNode(Node):
     # =========================================================================
     def _state_parking(self, image, result_image):
         """
-        1단계: park_cy > PARK_STOP_Y 될 때까지 라인 추종 직진 (타임아웃 안전장치)
-        2단계: 우측 수직이동 (진행방향 기준 우측 = linear.y 양수)
+        1단계: park 표지판 bbox 면적이 PARK_STOP_AREA 넘을 때까지 라인 추종 직진
+               (표지판 cy는 접근해도 커지지 않음 — 라벨 실측 근거, 타임아웃 안전장치 유지)
+        2단계: 우측 수직이동
         3단계: 정지 → DONE
         """
         elapsed = self._elapsed()
         detected = self._scan_objects()
-        park_cy = detected["park_cy"]
+        park_area = detected["park_area"]
 
         binary = self.lane_detect.get_binary(image)
         result_image, lane_angle, lane_x = self.lane_detect(binary, result_image)
@@ -656,11 +662,11 @@ class SelfDrivingNode(Node):
         if lane_x is None:
             lane_x = -1.0
 
-        # 1단계: 표지판까지 직진 (park_cy 기반 + 타임아웃)
+        # 1단계: 표지판까지 직진 (park 면적 기반 + 타임아웃)
         # _park_side_start가 None일 때만 1단계 — 2단계 진입 후에는 되돌아오지 않음
         if (
             self._park_side_start is None
-            and park_cy < PARK_STOP_Y
+            and park_area < PARK_STOP_AREA
             and elapsed < PARK_TIMEOUT
         ):
             self._do_line_follow(lane_x, lane_angle, PARK_SPEED)
@@ -730,11 +736,12 @@ class SelfDrivingNode(Node):
     def _scan_objects(self) -> dict:
         result = {
             "park": False,
-            "park_cy": 0,  # ✅ 수정 7: park_cy 키 추가
+            "park_area": 0,  # 주차 정지 판단용 — cy 대신 면적 사용 (라벨 실측 근거)
             "crosswalk_y": 0,
             "traffic": None,
             "arrow": None,
         }
+        best_traffic_area = 0  # 신호등 여러 개 감지 시 가장 큰(=가까운) 것만 채택
 
         for obj in self.objects_info:
             name = obj.class_name
@@ -743,7 +750,7 @@ class SelfDrivingNode(Node):
 
             if name == "park" and area > PARK_AREA_MIN:
                 result["park"] = True
-                result["park_cy"] = max(result["park_cy"], cy)
+                result["park_area"] = max(result["park_area"], area)
 
             elif name == "crosswalk":
                 bw = abs(obj.box[2] - obj.box[0])
@@ -753,7 +760,10 @@ class SelfDrivingNode(Node):
                     result["crosswalk_y"] = max(result["crosswalk_y"], cy)
 
             elif name in ("red", "green") and area > TRAFFIC_AREA_MIN:
-                result["traffic"] = name
+                # 다른 교차로의 원거리 신호등 오인 방지: 최대 면적 박스 우선
+                if area > best_traffic_area:
+                    best_traffic_area = area
+                    result["traffic"] = name
 
             elif name == "go" and area > ARROW_AREA_MIN_GO:
                 result["arrow"] = name
