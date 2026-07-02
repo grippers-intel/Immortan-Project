@@ -140,11 +140,15 @@ class SelfDrivingNode(Node):
         # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
         self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
         self.park_lateral_dist = 0.4   # 횡이동 거리(m). (0.32→0.4: 우측 진입이 모자라 증가. 더 깊으면 ↓, 덜 들어가면 ↑)
-        # [주차 트리거 - arm/fire] 좁은 FOV라 표지판이 주차 직전 화면 우측으로 빠져나감. 이 '이탈 순간'이
-        #   매번 일정한 기하학적 지점이라 트리거로 씀. ① 가까이서 arm → ② 우측 이탈 시 fire.
+        # [주차 트리거 - arm/fire] ① 표지판이 가까이(area>min) 보이면 arm(+arm 시점 park_x 기록)
+        #   ② arm 후 표지판이 park_fire_advance 만큼 더 우측으로 이동하면(=로봇이 그만큼 접근) fire.
+        #   절대 px가 아니라 'arm 후 전진량'을 쓰는 이유: 접근 옆거리가 매번 달라 같은 px라도 로봇 실제 위치가
+        #   달랐음(성공판 arm px434→fire507, 실패판 arm px506→즉시 507로 조기주차). 전진량은 훨씬 일관적.
         self.park_armed = False        # 표지판을 가까이서 충분히 봤다(주차 준비 완료)
-        self.park_arm_frames = 3       # park_area>min 이 이 프레임 수 이상이면 arm. (5→3: 표지판이 우측으로 빠지기 전에 arm 완료)
-        self.park_exit_x = 500         # 표지판 중심 x가 이 값(0~640) 넘으면 '우측 이탈'로 보고 fire. 로그의 park_x로 튜닝
+        self.park_arm_frames = 3       # park_area>min 이 이 프레임 수 이상이면 arm
+        self.park_arm_x = 0            # arm 된 시점의 park_x (발사 기준점)
+        self.park_fire_advance = 70    # arm 후 park_x가 이만큼 더 커지면(우측 이동=접근) 발사. (성공판 434→507=73px 기준)
+                                       #   주차칸 전에 서면 ↑, 넘어가면 ↓
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
@@ -600,22 +604,26 @@ class SelfDrivingNode(Node):
                         self.count_park += 1
                         if self.count_park >= self.park_arm_frames and not self.park_armed:
                             self.park_armed = True
+                            self.park_arm_x = self.park_x   # [핵심] arm 시점 park_x 기록 → 발사는 '여기서 +전진량'
                             self.get_logger().info('\033[1;41m=== PARK ARMED (area=%d, park_x=%d) ===\033[0m' % (
                                 self.park_area, self.park_x))
                     else:
                         if self.count_park > 0:
                             self.count_park -= 1
-                    # ② fire: armed 이후 표지판이 우측 끝(park_x>exit_x)으로 가거나 연속으로 사라지면 주차 시작
+                    # ② fire: [변경] 절대 px가 아니라 'arm 후 표지판이 park_fire_advance 만큼 더 우측으로 이동'하면 발사.
+                    #   절대 px(exit_x)는 접근 옆거리에 따라 로봇 실제 위치가 달라 불일치했음(성공판 arm px434→fire507,
+                    #   실패판 arm px506→즉시 507). arm 후 '전진량'이 훨씬 일관적이라 항상 일정 접근 후 주차칸 도달.
+                    #   표지판이 프레임 밖으로 사라지면(gone) 그때도 발사(우측 이탈 = 로봇 근접).
                     if self.park_armed:
                         twist.linear.x = self.slow_down_speed   # armed면 계속 서행(발사 직전 감속 유지)
                         if self.park_x < 0:
                             self.park_gone_count += 1
                         else:
                             self.park_gone_count = 0
-                        right_edge = (0 < self.park_x and self.park_x > self.park_exit_x)
-                        if right_edge or self.park_gone_count >= self.park_gone_frames:
-                            self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d gone=%d) ===\033[0m' % (
-                                self.park_x, self.park_gone_count))
+                        advanced = (0 < self.park_x and self.park_x >= self.park_arm_x + self.park_fire_advance)
+                        if advanced or self.park_gone_count >= self.park_gone_frames:
+                            self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d arm_x=%d gone=%d) ===\033[0m' % (
+                                self.park_x, self.park_arm_x, self.park_gone_count))
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
