@@ -729,6 +729,11 @@ class SelfDrivingNode(Node):
                     RGBState(index=2, red=0 if blink_on else 255, green=0, blue=0),
                 ]
                 self.rgb_pub.publish(msg)
+                # GPIO 대기 중 빨간불 교대 점멸 (RGB와 동일 주기)
+                GPIO.output(PIN_RED, LED_ON if blink_on else LED_OFF)
+                GPIO.output(PIN_GREEN, LED_OFF)
+                GPIO.output(PIN_YELLOW_LEFT, LED_OFF)
+                GPIO.output(PIN_YELLOW_RIGHT, LED_OFF)
                 time.sleep(0.01)
 
             bgr_image = cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR)
