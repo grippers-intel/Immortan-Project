@@ -525,39 +525,39 @@ class SelfDrivingNode(Node):
     #         led.mode_straight() #TODO:
     #     self.publish_leds(led1, led2)
     def update_leds(self):
-    GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-    blink = int(time.time() / 0.3) % 2 == 0
+        GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
+        blink = int(time.time() / 0.3) % 2 == 0
 
-    if self.parked:
-        c = YELLOW if blink else OFF
-        led1 = led2 = c
-        new_mode = 'park_done'
-    elif self.stop:
-        led1 = led2 = RED
-        new_mode = 'stop'
-    elif self.doing_turn_right or self.turn_right:
-        led1 = OFF
-        led2 = YELLOW if blink else OFF
-        new_mode = 'turn_right'
-    elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-        led1 = led2 = YELLOW if blink else OFF
-        new_mode = 'go'
-    else:
-        led1 = led2 = GREEN
-        new_mode = 'straight'
+        if self.parked:
+            c = YELLOW if blink else OFF
+            led1 = led2 = c
+            new_mode = 'park_done'
+        elif self.stop:
+            led1 = led2 = RED
+            new_mode = 'stop'
+        elif self.doing_turn_right or self.turn_right:
+            led1 = OFF
+            led2 = YELLOW if blink else OFF
+            new_mode = 'turn_right'
+        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
+            led1 = led2 = YELLOW if blink else OFF
+            new_mode = 'go'
+        else:
+            led1 = led2 = GREEN
+            new_mode = 'straight'
 
-    # [핵심] 모드가 바뀔 때만 GPIO LED 호출 (매 프레임 호출 방지)
-    if new_mode != self._last_gpio_mode:
-        self._last_gpio_mode = new_mode
-        if new_mode == 'stop':
-            led.mode_stop()
-        elif new_mode == 'turn_right':
-            led.mode_turn_right()
-        elif new_mode == 'straight' or new_mode == 'go':
-            led.mode_straight()
-        # park_done은 park_action()에서 처리
+        # [핵심] 모드가 바뀔 때만 GPIO LED 호출 (매 프레임 호출 방지)
+        if new_mode != self._last_gpio_mode:
+            self._last_gpio_mode = new_mode
+            if new_mode == 'stop':
+                led.mode_stop()
+            elif new_mode == 'turn_right':
+                led.mode_turn_right()
+            elif new_mode == 'straight' or new_mode == 'go':
+                led.mode_straight()
+            # park_done은 park_action()에서 처리
 
-    self.publish_leds(led1, led2)
+        self.publish_leds(led1, led2)
 
 
     def main(self):
