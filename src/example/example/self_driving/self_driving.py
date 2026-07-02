@@ -858,6 +858,18 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
+                    # [수정] 차선 미검출(lane_x<0) 폴백. 횡단보도 위/직후엔 줄무늬 때문에 near ROI가 차선을
+                    #   못 잡아 lane_x=-1 → 위 블록들이 다 스킵돼 cmd_vel이 안 나가고 로봇이 멈춰버림('툭 쳐야 감').
+                    #   주행 중(정지/주차/우회전동작/주차완료 아님)인데 차선을 못 찾으면 살살 직진해 차선을 재획득.
+                    if (not self.stop and not self.start_park and not self.doing_turn_right
+                            and not self.parked and lane_x < 0):
+                        fb = Twist()
+                        fb.linear.x = self.corner_speed   # 살살 전진(횡단보도 폭 지나가 차선 재검출)
+                        self.mecanum_pub.publish(fb)
+                        self.get_logger().info('\033[1;32mDRIVE(fallback) lin=%.2f ang=0.00 (lane_x=-1 직진 폴백)\033[0m' % self.corner_speed)
+                        # 차선 못 잡는 동안 start_turn이 갇히지 않게 복귀시간 지나면 해제
+                        if self.start_turn and (time.time() - self.start_turn_time_stamp) > self.turn_recover_time:
+                            self.start_turn = False
 
              
                 if self.objects_info:
