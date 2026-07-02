@@ -143,7 +143,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.375,  # TODO : 0.30→0.375 (좌0.5/우0.25 2:1 비율, track=0.185m 기준)
-                "angular_z": -1.35,  # TODO : -0.55→-1.35 (2:1 바퀴 비율 달성, 0.0925m×2=0.185m)
+                "angular_z": -1.0,  # TODO : -0.55→-1.35→-1.0 (과회전 문제로 낮춤)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
