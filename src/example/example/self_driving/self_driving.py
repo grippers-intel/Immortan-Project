@@ -154,8 +154,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.27,  # TODO : ...→0.24→0.27 (좌바퀴 0.4로, 우바퀴 0.14. 회전 후 저속 B와 조합)
-                "angular_z": -1.4,  # TODO : -0.55→...→-1.4 유지
+                "linear_x": 0.29,  # 좌바퀴 0.40 / 우바퀴 0.18 (linear 0.29, angular -1.189)
+                "angular_z": -1.189,  # 좌 0.40 우 0.18 맞춤 (기존 -1.4에서 완만해짐)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -505,7 +505,9 @@ class SelfDrivingNode(Node):
                         self.pre_slow_down = True
 
                     if self.pre_slow_down:
-                        if self.crosswalk_box_height > 17:  # 12→17: 더 가까이 가서 정지
+                        if (
+                            self.crosswalk_box_height > 19
+                        ):  # 12→17→19: 더 가까이 가서 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -555,6 +557,12 @@ class SelfDrivingNode(Node):
                         )
                         self.count_right = 0
                         self.start_slow_down = False
+                        self.crosswalk_distance = (
+                            0  # 회전 중 크로스워크 재감지/폭주 방지
+                        )
+                        self.crosswalk_ignore = True
+                        self.crosswalk_ignore_time = time.time()
+                        self.pre_slow_down = False
                         threading.Thread(target=self.turn_right_action).start()
                     elif is_green and time.time() - self.stop_time > 0.5:
                         # 초록불 → 재출발 (최소 0.5초 정지 보장)
@@ -725,9 +733,7 @@ class SelfDrivingNode(Node):
                     # ★체크포인트: 아래 1.5초 = 저속 유지 시간(0.2×1.5=30cm). 줄이면 랩타임↑ 이지만 코너 횡단보도가
                     #   30cm보다 멀면 놓쳐서 코스팅 위험. 로그상 #2가 회전 후 28cm라 1.5가 딱. 테스트로 이 값(1.5) 조정.
                     POST_TURN_SLOW_SEC = 1.5  # ★튜닝 대상: 1.5→줄이면 빨리 0.45 복귀
-                    POST_TURN_SPEED = (
-                        0.3  # ★튜닝: 0.2→0.3 (22cm 접근 ~0.73초, 1초→단축)
-                    )
+                    POST_TURN_SPEED = 0.35  # ★튜닝: 0.2→0.3→0.35
                     if (
                         not self.start_turn
                         and not self.pre_slow_down
