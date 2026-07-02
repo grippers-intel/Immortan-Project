@@ -445,38 +445,31 @@ class SelfDrivingNode(Node):
                 # 시작점 신호등 대기: red 감지되면 대기, red 꺼지거나 green 보이면 출발
                 if self.start_light_wait:
                     ts = self.traffic_signs_status
-                    is_red = is_green = False
+                    is_red = False
                     if ts is not None:
                         light_area = abs(ts.box[0] - ts.box[2]) * abs(
                             ts.box[1] - ts.box[3]
                         )
                         if ts.class_name == "red" and light_area > 100:
-                            is_red = True  # 작은 red도 감지(민감), 시작 red 박스≈440
-                        elif ts.class_name == "green":
-                            is_green = True
-                    go, reason = False, ""
-                    if is_green:
-                        go, reason = True, "초록불"
-                    elif is_red:
+                            is_red = True  # 작은 red도 감지(민감)
+                    if is_red:
                         self.start_light_red_seen = True
                         self.start_light_red_last_time = time.time()
-                    elif (
+                    # 오직 하나: red를 봤고, 3초간 안 보이면 출발
+                    if (
                         self.start_light_red_seen
-                        and time.time() - self.start_light_red_last_time > 1.5
+                        and time.time() - self.start_light_red_last_time > 3.0
                     ):
-                        go, reason = True, "빨간불 꺼짐"
-                    elif (
-                        not self.start_light_red_seen
-                        and time.time() - self.start_delay_time > 2.0
-                    ):
-                        go, reason = True, "신호등 없음(안전장치)"
-                    if go:
                         self.start_light_wait = False
                         self.accel_ramp_active = True  # 출발 가속 구간 시작
                         self.accel_ramp_start_time = time.time()
-                        self.get_logger().info("\033[1;32m%s → 출발\033[0m" % reason)
+                        self.get_logger().info(
+                            "\033[1;32m빨간불 꺼짐(3초) → 출발\033[0m"
+                        )
                     else:
-                        self.mecanum_pub.publish(Twist())  # 신호등 대기
+                        self.mecanum_pub.publish(
+                            Twist()
+                        )  # red 볼 때까지/꺼질 때까지 대기
                         continue
 
                 h, w = image.shape[:2]
@@ -512,9 +505,7 @@ class SelfDrivingNode(Node):
                         self.pre_slow_down = True
 
                     if self.pre_slow_down:
-                        if (
-                            self.crosswalk_box_height > 12
-                        ):  # 15→12: 더 일찍(멀리) 정지 명령 → 코스팅 후에도 앞에서 정지
+                        if self.crosswalk_box_height > 17:  # 12→17: 더 가까이 가서 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -537,6 +528,7 @@ class SelfDrivingNode(Node):
                         self.stop_time = time.time()
                         self.count_turn = 0  # TODO 00 : 우회전 카운트 리셋
                         self.start_turn = False  # TODO 00 : 우회전 플래그 리셋
+                        self.red_stop_last_time = 0  # 새 횡단보도 정지 → red 타이머 리셋 (정지 후 이 자리서 red 새로 탐색)
 
                     ts = self.traffic_signs_status
                     is_red_stop = False
@@ -554,10 +546,14 @@ class SelfDrivingNode(Node):
                         self.red_stop_last_time = time.time()  # red 볼 때마다 갱신
 
                     # red를 1.5초 안에 봤으면 계속 대기 (감지 공백 허용). red 1.5초간 안 보이면 꺼진 것으로 판단
-                    if time.time() - self.red_stop_last_time < 1.5:
-                        pass  # 빨간불 대기 (green 와도 아래에서 처리되지만 red 우선)
+                    if time.time() - self.red_stop_last_time < 3.0:
+                        pass  # 빨간불 대기: red 3초간 안 보여야 꺼진 것으로 판단 (공백 허용)
                     elif self.have_turn_right and time.time() - self.stop_time > 0.7:
                         # 표지판 5회 + 정지 0.7초 후 → 정해진 우회전(83°) 실행 → 완료 후 파킹모드
+                        self.have_turn_right = (
+                            False  # 즉시 리셋 (회전 1.79초 동안 재트리거 방지)
+                        )
+                        self.count_right = 0
                         self.start_slow_down = False
                         threading.Thread(target=self.turn_right_action).start()
                     elif is_green and time.time() - self.stop_time > 0.5:
@@ -729,12 +725,15 @@ class SelfDrivingNode(Node):
                     # ★체크포인트: 아래 1.5초 = 저속 유지 시간(0.2×1.5=30cm). 줄이면 랩타임↑ 이지만 코너 횡단보도가
                     #   30cm보다 멀면 놓쳐서 코스팅 위험. 로그상 #2가 회전 후 28cm라 1.5가 딱. 테스트로 이 값(1.5) 조정.
                     POST_TURN_SLOW_SEC = 1.5  # ★튜닝 대상: 1.5→줄이면 빨리 0.45 복귀
+                    POST_TURN_SPEED = (
+                        0.3  # ★튜닝: 0.2→0.3 (22cm 접근 ~0.73초, 1초→단축)
+                    )
                     if (
                         not self.start_turn
                         and not self.pre_slow_down
                         and 0 < time.time() - self.turn_exit_time < POST_TURN_SLOW_SEC
                     ):
-                        twist.linear.x = min(twist.linear.x, 0.2)
+                        twist.linear.x = min(twist.linear.x, POST_TURN_SPEED)
                     # 파킹모드: 저속 직진 (차선 속도 무시). 횡단보도 감속(pre_slow_down) 중엔 creep 유지
                     # ★체크포인트: 아래 PARKING_SPEED 튜닝 대상. 0.2로 먼저 테스트 →
                     #   ① 중앙추적 값이 많이 안 흔들리고 ② 우회전 직후 횡단보도 바로 보여서 중앙정렬 쉬우면 → 속도 올려도 됨
@@ -773,8 +772,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 1.0
-                    ):  # 0.8→1.0초 상한: angular_z=-1.4 기준 1.4×1.0=1.4rad≈80° (80° 목표)
+                        turn_elapsed > 0.95
+                    ):  # 1.0→0.95초 상한: angular_z=-1.4 기준 1.4×0.95=1.33rad≈76°
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
