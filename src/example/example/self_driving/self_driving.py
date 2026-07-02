@@ -858,18 +858,22 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
-                    # [수정] 차선 미검출(lane_x<0) 폴백. 횡단보도 위/직후엔 줄무늬 때문에 near ROI가 차선을
-                    #   못 잡아 lane_x=-1 → 위 블록들이 다 스킵돼 cmd_vel이 안 나가고 로봇이 멈춰버림('툭 쳐야 감').
-                    #   주행 중(정지/주차/우회전동작/주차완료 아님)인데 차선을 못 찾으면 살살 직진해 차선을 재획득.
+                    # [수정] 차선 미검출(lane_x<0) 폴백. 단, 코너 회전 중엔 직진 폴백 금지(회전 이탈 방지).
                     if (not self.stop and not self.start_park and not self.doing_turn_right
                             and not self.parked and lane_x < 0):
-                        fb = Twist()
-                        fb.linear.x = self.corner_speed   # 살살 전진(횡단보도 폭 지나가 차선 재검출)
-                        self.mecanum_pub.publish(fb)
-                        self.get_logger().info('\033[1;32mDRIVE(fallback) lin=%.2f ang=0.00 (lane_x=-1 직진 폴백)\033[0m' % self.corner_speed)
-                        # 차선 못 잡는 동안 start_turn이 갇히지 않게 복귀시간 지나면 해제
+                        # stale start_turn 해제: 코너가 끝난 지 오래(복귀시간 초과)인데 차선을 못 잡아 갇힌 경우
+                        #   (예: 횡단보도 위). 실제 코너 중(복귀시간 이내)이면 True 유지.
                         if self.start_turn and (time.time() - self.start_turn_time_stamp) > self.turn_recover_time:
                             self.start_turn = False
+                        if self.start_turn:
+                            # [코너 회전 중 순간 차선 놓침] 직진 폴백하면 대각선 이탈 → 발행 안 함(직전 회전 명령 유지).
+                            pass
+                        else:
+                            # [횡단보도 위 등 차선 끊김] 살살 직진해 폭을 지나 차선 재획득(정지 안 하게).
+                            fb = Twist()
+                            fb.linear.x = self.corner_speed
+                            self.mecanum_pub.publish(fb)
+                            self.get_logger().info('\033[1;32mDRIVE(fallback) lin=%.2f ang=0.00 (lane_x=-1 직진 폴백)\033[0m' % self.corner_speed)
 
              
                 if self.objects_info:
