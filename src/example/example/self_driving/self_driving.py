@@ -353,7 +353,7 @@ class SelfDrivingNode(Node):
             self.last_led_state = None          # LED 강제 재발행되도록
         self.publish_leds((255, 0, 0), (255, 0, 0))  # 스탠바이 = 정지(빨강)
 
-    def shutdown(self, signum, frame):  # press 'ctrl+c' to close the program
+    def shutdown(self):  # press 'ctrl+c' to close the program
         self.is_running = False
 
     def image_callback(self, ros_image):  # callback target checking
@@ -652,6 +652,7 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     # self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                     #     self.park_x, self.park_area, self.park_min_area))
+                    pass
                 if self.going_to_park and 0 < self.park_x and self.park_area > self.park_min_area:
                     # [수정] going_to_park(우회전 이후)일 때만 주차. 출발 지점에서 park 표지판이 보여도
                     #   주차/접근 모드에 안 들어가게(다른 팀이 신호등을 치워 출발선에서 park가 보이던 문제).
