@@ -196,6 +196,13 @@ class SelfDrivingNode(Node):
         )
         self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
         #   (실측 로그 기반으로 1200 설정)
+        # [7차 실차 테스트] "주차 표지판을 보고도 주차를 안 함" - count_park>=15는 메인
+        # 루프가 카메라와 같은 15fps라 약 1초간 단 한 프레임도 놓치지 않고 연속 검출돼야
+        # 함. crosswalk_confirm_count/turn_confirm_count에서 이미 겪은 것과 같은 패턴
+        # (박스 면적 jitter로 단 한 프레임만 미달해도 카운터가 0으로 리셋됨)일 가능성이
+        # 높아 5로 완화. get_object_callback에 area/count_park 진단 로그도 추가해 다음
+        # 로그로 실제 area가 min을 넘는지, 카운트가 몇 번이나 쌓이는지 확인 가능하게 함.
+        self.park_confirm_count = 5
         self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
@@ -227,7 +234,10 @@ class SelfDrivingNode(Node):
         # 미션 자체를 통째로 건너뛰는 건 더 나쁨). turn_right가 확정된 뒤 이 시간(초)
         # 이상 crosswalk_passed를 못 받으면 정규화를 포기하고 그냥 회전을 실행하도록
         # 안전장치를 둠(위치 정규화는 execute_turn_right 내부의 타임아웃 로직이 대신 처리).
-        self.turn_right_wait_timeout = 2.0
+        # [7차 실차 테스트] "표지판 보고 회전은 하는데 타이밍이 조금 늦다" 피드백 -> 2.0
+        # -> 1.0으로 절반 낮춤. crosswalk_passed를 기다리는 대기가 줄어드는 만큼 위치
+        # 정규화 정확도는 약간 희생되지만, execute_turn_right 내부 타임아웃이 보완함.
+        self.turn_right_wait_timeout = 1.0
 
         # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
         self.count_go = 0
@@ -250,10 +260,12 @@ class SelfDrivingNode(Node):
         )
         #   (0.8→1.1: 조금 일찍 돌아 안쪽 라인 밟던 것 → 더 들어간 뒤 회전)
         self.turn_right_duration = (
-            3.3  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            3.0  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
         #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
         #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
+        #   [7차 실차 테스트] "매카넘 회전 자체는 잘 됐는데 회전각이 너무 넓다" ->
+        #   3.3에서 처음 값이었던 3.0으로 되돌림. 여전히 과하게 돌면 더 ↓, 덜 돌면 ↑
         # [③ 시작점 정규화] 우회전은 개방루프라 정지 위치가 매번 달라지면 도착 라인도 달라짐.
         #   최소 직진(turn_right_forward_time) 후, 횡단보도가 완전히 지나갈 때까지(거리<pass_dist) 추가 전진 →
         #   항상 '횡단보도를 막 지난 지점'에서 회전 시작 → 시작점 일정. (검출 실패 대비 타임아웃 있음)
@@ -816,7 +828,7 @@ class SelfDrivingNode(Node):
                     and not self.stop
                 ):
                     self.count_park += 1
-                    if self.count_park >= 15:
+                    if self.count_park >= self.park_confirm_count:
                         self.count_park = 0
                         self.start_park = True
                         threading.Thread(
@@ -982,6 +994,13 @@ class SelfDrivingNode(Node):
                     # 코너로 판단해 회전 중이었다면(start_turn, turn_recover_time 이내) 라인을
                     # 다시 잡을 때까지 마지막 회전 방향을 유지해 최소한 코너 바깥으로 그대로
                     # 직진하는 것은 피함.
+                    # [7차 실차 테스트] start_turn을 False로 되돌리는 clear 로직이 위
+                    # "lane_x >= 0" 분기 안에만 있어서, 라인을 완전히 놓친 채(이 분기로
+                    # 빠진 채) turn_recover_time을 훌쩍 넘겨도 start_turn이 계속 True로
+                    # 남아있었음(로그에서 최대 7.9초간 True로 고정된 사례 확인). 그 동안은
+                    # PID 직선보정이 아예 안 걸려 코너 앞뒤로 "멈칫하는"(급회전각 유지+
+                    # corner_speed) 구간이 실제 필요한 시간보다 훨씬 길게 이어졌음. 여기서도
+                    # 동일하게 시간 초과시 clear 하도록 수정.
                     if (
                         self.start_turn
                         and time.time() - self.start_turn_time_stamp
@@ -991,6 +1010,8 @@ class SelfDrivingNode(Node):
                             twist.angular.z = self.turn_angular_z
                         else:
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
+                    elif self.start_turn:
+                        self.start_turn = False
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -1124,6 +1145,14 @@ class SelfDrivingNode(Node):
                     self.park_x = center[0]
                     self.park_area = (
                         area  # 규정10: 표지판 거리(면적) 기반 주차 트리거에 사용
+                    )
+                    # [진단용] 7차 실차 테스트에서 주차 표지판을 보고도 주차를 안 한 원인이
+                    # area가 park_min_area에 못 미친 건지, count_park 누적이 중간에 계속
+                    # 끊긴 건지 구분할 데이터가 없어 area/count_park를 로그로 남김.
+                    self.get_logger().info(
+                        "\033[1;36m%s\033[0m"
+                        % f"park candidate: area={area:.0f} (min={self.park_min_area}) "
+                        f"count_park={self.count_park}"
                     )
                 elif (
                     class_name == "red" or class_name == "green"
