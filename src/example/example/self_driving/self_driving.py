@@ -578,12 +578,14 @@ class SelfDrivingNode(Node):
                         and center_x[3]
                         == -1  # TODO : Box3 조건 제거 - 코너에서 Box3이 계속 살아있어 count 미도달 → Box4=Box5=-1만 요구하도록 완화
                         and center_x[4] == -1
-                        and time.time() - self.crosswalk_ignore_time > 1.8
+                        and time.time() - self.crosswalk_ignore_time
+                        > 0.5  # 1.8→0.5: 횡단보도 직후 코너에서 차단 방지
+                        and not self.pre_slow_down  # 횡단보도 접근 중 false turn 방지
                     ):
                         self.count_turn += 1  # TODO : drift 감지 제거 - 0.5m/s에서 진짜 코너 drift(88px)가 기준(70px) 초과해서 카운트 리셋되는 문제 → 수정
                         if (
-                            self.count_turn > 4
-                            and not self.start_turn  # TODO : 7->4 복원, angular_z 감소로 우회전 후 위치 보정
+                            self.count_turn > 1
+                            and not self.start_turn  # 4→1: 횡단보도 직후 코너 window 2프레임으로 축소
                         ):  # TODO 01 : 10->5 (깜빡임 감안해서 낮춤)
                             self.start_turn = True
                             self.count_turn = 0
