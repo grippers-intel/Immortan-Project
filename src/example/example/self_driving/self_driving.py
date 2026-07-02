@@ -144,7 +144,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.35,  # TODO : 0.45→0.2→0.25→0.35 (양쪽 바퀴 다 상향, 우바퀴 데드밴드 탈출)
-                "angular_z": -1.9,  # TODO : ...→-2.16→-1.9 (좌 0.53/우 0.17, 우바퀴 stick-slip 해소 + 각도 축소)
+                "angular_z": -1.5,  # TODO : ...→-1.9→-1.5 (좌 0.49/우 0.21, 우바퀴 더 올리고 회전각 축소)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -274,7 +274,7 @@ class SelfDrivingNode(Node):
         crosswalk_hit = False
         while (
             time.time() - turn_start < 0.7
-        ):  # TODO : 시간 0.75→0.7초 단축, angular_z=-1.9 기준 1.9×0.7=1.33rad≈76° (각도 축소)
+        ):  # TODO : angular_z=-1.5 기준 1.5×0.7=1.05rad≈60° (각도 더 축소)
             if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
                 crosswalk_hit = True
                 break
@@ -445,8 +445,8 @@ class SelfDrivingNode(Node):
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if (
-                        time.time() - self.crosswalk_ignore_time > 1.2
-                    ):  # TODO : 3.5→6.0→1.5→0.65→0.8→1.2 - just_stopped_crosswalk 플래그가 코너 횡단보도 담당, ignore는 현재 횡단보도 통과만 커버 (1.2s≈57cm)
+                        time.time() - self.crosswalk_ignore_time > 1.5
+                    ):  # TODO : 3.5→6.0→1.5→0.65→0.8→1.2→1.5 - 정지 후 같은 횡단보도 재정지 방지 (1.5s≈75cm@0.5m/s)
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
@@ -708,7 +708,7 @@ class SelfDrivingNode(Node):
 
                     if (
                         turn_elapsed > 0.7
-                    ):  # 시간 0.78→0.7초 상한, angular_z=-1.9 기준 1.9×0.7=1.33rad≈76° (각도 축소)
+                    ):  # angular_z=-1.5 기준 1.5×0.7=1.05rad≈60° 상한 (각도 더 축소)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
