@@ -134,6 +134,11 @@ class SelfDrivingNode(Node):
         self.start_delay = True  # TODO 01 : 시작 딜레이 (오작동 우회전 방지)
         self.start_delay_time = 0  # TODO 01 : 시작 딜레이 (오작동 우회전 방지)
         self._last_btn_time = 0  # 수동 더블클릭 감지용
+        self.start_light_wait = (
+            True  # 시작점 신호등 대기 (red 보이면 대기, 꺼지거나 green이면 출발)
+        )
+        self.start_light_red_seen = False  # 시작 red를 한 번이라도 봤는지
+        self.start_light_red_last_time = 0  # 마지막으로 red 본 시각
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
@@ -422,13 +427,48 @@ class SelfDrivingNode(Node):
                 if self.start_delay:
                     if time.time() - self.start_delay_time > 0.5:
                         self.start_delay = False
-                        self.accel_ramp_active = True  # 출발 가속 구간 시작
-                        self.accel_ramp_start_time = time.time()
                         self.get_logger().info(
-                            "\033[1;32m%s\033[0m" % "start_delay 해제 - 주행 시작!"
+                            "\033[1;32m%s\033[0m" % "start_delay 해제 - 신호등 확인"
                         )
                     else:
                         self.mecanum_pub.publish(Twist())  # 명시적으로 정지 명령
+                        continue
+
+                # 시작점 신호등 대기: red 감지되면 대기, red 꺼지거나 green 보이면 출발
+                if self.start_light_wait:
+                    ts = self.traffic_signs_status
+                    is_red = is_green = False
+                    if ts is not None:
+                        light_area = abs(ts.box[0] - ts.box[2]) * abs(
+                            ts.box[1] - ts.box[3]
+                        )
+                        if ts.class_name == "red" and light_area > 100:
+                            is_red = True  # 작은 red도 감지(민감), 시작 red 박스≈440
+                        elif ts.class_name == "green":
+                            is_green = True
+                    go, reason = False, ""
+                    if is_green:
+                        go, reason = True, "초록불"
+                    elif is_red:
+                        self.start_light_red_seen = True
+                        self.start_light_red_last_time = time.time()
+                    elif (
+                        self.start_light_red_seen
+                        and time.time() - self.start_light_red_last_time > 0.5
+                    ):
+                        go, reason = True, "빨간불 꺼짐"
+                    elif (
+                        not self.start_light_red_seen
+                        and time.time() - self.start_delay_time > 2.0
+                    ):
+                        go, reason = True, "신호등 없음(안전장치)"
+                    if go:
+                        self.start_light_wait = False
+                        self.accel_ramp_active = True  # 출발 가속 구간 시작
+                        self.accel_ramp_start_time = time.time()
+                        self.get_logger().info("\033[1;32m%s → 출발\033[0m" % reason)
+                    else:
+                        self.mecanum_pub.publish(Twist())  # 신호등 대기
                         continue
 
                 h, w = image.shape[:2]
