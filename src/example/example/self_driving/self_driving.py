@@ -883,10 +883,6 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
-                    twist.linear.x = 0.04
-                    twist.angular.z = 0.5
-                    self.mecanum_pub.publish(twist)
-                    time.sleep(0.01)
 
                 if self.objects_info:
                     for i in self.objects_info:
