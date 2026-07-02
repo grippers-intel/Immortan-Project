@@ -151,6 +151,8 @@ class SelfDrivingNode(Node):
                                        #   주차칸 전에 서면 ↑, 넘어가면 ↓
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
+        self.park_last_x = 0           # 마지막으로 본 park_x (gone이 진짜 우측 이탈인지 dropout인지 구분용)
+        self.park_gone_min_x = 540     # gone 발사 인정 최소 last_x. 이보다 낮은데 사라지면 YOLO dropout으로 보고 무시
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 230  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215→230: 막판 우측 바퀴가
                                        #   라인 밟아 조금 더 좌측 유지. 우측 바퀴 계속 밟으면 ↑, 좌측으로 치우치면 ↓)
@@ -620,8 +622,12 @@ class SelfDrivingNode(Node):
                             self.park_gone_count += 1
                         else:
                             self.park_gone_count = 0
+                            self.park_last_x = self.park_x      # 마지막으로 본 park_x 기록(gone 판정용)
                         advanced = (0 < self.park_x and self.park_x >= self.park_arm_x + self.park_fire_advance)
-                        if advanced or self.park_gone_count >= self.park_gone_frames:
+                        # [수정] gone 발사는 '표지판이 실제 우측 끝(park_gone_min_x)까지 갔다가 사라졌을 때'만 인정.
+                        #   YOLO가 잠깐 놓친 dropout(마지막 park_x가 아직 중앙)일 땐 발사 안 함 → 조기주차 방지(Run2).
+                        real_exit = (self.park_gone_count >= self.park_gone_frames and self.park_last_x >= self.park_gone_min_x)
+                        if advanced or real_exit:
                             self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d arm_x=%d gone=%d) ===\033[0m' % (
                                 self.park_x, self.park_arm_x, self.park_gone_count))
                             self.mecanum_pub.publish(Twist())
