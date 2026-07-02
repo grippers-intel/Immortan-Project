@@ -59,9 +59,7 @@ class SelfDrivingNode(Node):
         # [② 우회전 후 복귀용 PID] 직진용 self.pid(0.01)는 휘청 방지로 아주 약함 → 회전 직후 우측라인으로
         #   당겨오는 힘이 부족. going_to_park 우측라인 추종은 더 단단한 전용 게인을 씀(파고듦 빠르게 복구).
         #   여전히 파고들면 P ↑, 우측라인 넘어 반대로 튀면 P ↓.
-        self.pid_park = pid.PID(
-            0.012, 0.0, 0.003
-        )  # (0.02→0.012: 느린 접근속도에서 과보정→우측 라인 넘던 것 완화)
+        self.pid_park = pid.PID(0.02, 0.0, 0.003)
         self.param_init()
 
         self.fps = fps.FPS()
@@ -166,49 +164,30 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
-        self.park_cy = -1  # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = (
             0  # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
         )
-        # [방법1] 뎁스 기반 주차용: 최신 뎁스 이미지 + RGB 카메라 내부파라미터(ascamera rgb0/camera_info 실측값).
-        #   픽셀(u,v)+뎁스Z → 카메라기준 3D: X=(u-cx)Z/fx(우측+), Z=전방거리. 옆거리=X, 앞거리=Z.
-        self.depth_image = None
-        self.cam_fx = 574.997
-        self.cam_fy = 574.445
-        self.cam_cx = 332.225
-        self.cam_cy = 240.753
-        self.park_min_area = 400  # arm(주차 준비) 최소 면적. (700→400: 700은 arm이 늦어 발사가 px560대로 밀려
-        #   forward와 겹쳐 표지판 넘어뜨림. 400이면 arm 일찍 완료→발사 px≈505로 일관(4연속 테스트값).
-        #   멀리 작은 표지판(area 352)은 여전히 거름. 너무 일찍이면 ↑, arm 안되면 ↓)
-        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
-        #   (0.8→1.2→1.0: 0.8은 짧고 1.2는 넘어감(표지판 침). 발사 px≈505 기준 중간값 1.0.
-        #    여전히 짧으면 ↑(1.1), 넘어가면 ↓(0.9))
+        self.park_min_area = 350  # arm(주차 준비) 최소 면적. (1200→350: 중앙 주행 시 표지판이 옆으로 멀어져
+        #   area가 1120에서 정체→arm 실패로 주차 통과하던 문제. area는 불안정하고 park_x는
+        #   안정적이므로 arm은 느슨하게, 발사는 park_x(park_exit_x)로 결정. 오검출 arm되면 ↑)
+        self.park_forward_time = 0.8  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
+        #   (1.0→0.8: 주차가 너무 멀리 가서 멈춰 전진거리 축소. 더 멀면 ↓, 덜 가면 ↑)
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
         self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
         self.park_lateral_dist = 0.4  # 횡이동 거리(m). (0.32→0.4: 우측 진입이 모자라 증가. 더 깊으면 ↓, 덜 들어가면 ↑)
-        # [주차 트리거 - arm/fire] ① 표지판이 가까이(area>min) 보이면 arm(+arm 시점 park_x 기록)
-        #   ② arm 후 표지판이 park_fire_advance 만큼 더 우측으로 이동하면(=로봇이 그만큼 접근) fire.
-        #   절대 px가 아니라 'arm 후 전진량'을 쓰는 이유: 접근 옆거리가 매번 달라 같은 px라도 로봇 실제 위치가
-        #   달랐음(성공판 arm px434→fire507, 실패판 arm px506→즉시 507로 조기주차). 전진량은 훨씬 일관적.
+        # [주차 트리거 - arm/fire] 좁은 FOV라 표지판이 주차 직전 화면 우측으로 빠져나감. 이 '이탈 순간'이
+        #   매번 일정한 기하학적 지점이라 트리거로 씀. ① 가까이서 arm → ② 우측 이탈 시 fire.
         self.park_armed = False  # 표지판을 가까이서 충분히 봤다(주차 준비 완료)
-        self.park_arm_frames = 3  # park_area>min 이 이 프레임 수 이상이면 arm
-        self.park_arm_x = 0  # arm 된 시점의 park_x (발사 기준점)
-        self.park_fire_advance = 70  # arm 후 park_x가 이만큼 더 커지면(우측 이동=접근) 발사. (성공판 434→507=73px 기준)
-        #   주차칸 전에 서면 ↑, 넘어가면 ↓
+        self.park_arm_frames = 3  # park_area>min 이 이 프레임 수 이상이면 arm. (5→3: 표지판이 우측으로 빠지기 전에 arm 완료)
+        self.park_exit_x = 500  # 표지판 중심 x가 이 값(0~640) 넘으면 '우측 이탈'로 보고 fire. 로그의 park_x로 튜닝
         self.park_gone_count = 0  # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = (
             3  # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
         )
-        self.park_last_x = (
-            0  # 마지막으로 본 park_x (gone이 진짜 우측 이탈인지 dropout인지 구분용)
-        )
-        self.park_gone_min_x = 540  # gone 발사 인정 최소 last_x. 이보다 낮은데 사라지면 YOLO dropout으로 보고 무시
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
-        self.park_lane_setpoint = 230  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215→230: 막판 우측 바퀴가
-        #   라인 밟아 조금 더 좌측 유지. 우측 바퀴 계속 밟으면 ↑, 좌측으로 치우치면 ↓)
-        self.park_angular_limit = 0.25  # [②] 우회전 후 우측라인 복구 각속도 제한. (0.4→0.25: 느린 접근속도(0.1)에서
-        #   0.4는 반경 0.25m로 너무 급회전→오버슛으로 우측 라인 넘음. 파고듦 복구 약하면 ↑)
+        self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
+        self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -361,13 +340,6 @@ class SelfDrivingNode(Node):
             self.create_subscription(
                 ObjectsInfo, "/yolov5_ros2/object_detect", self.get_object_callback, 1
             )
-            # [방법1-1단계] 뎁스(16UC1=mm) 구독. 주차 표지판 픽셀의 실제 거리 읽어 3D 위치 계산(로그 검증용).
-            self.create_subscription(
-                Image,
-                "/ascamera/camera_publisher/depth0/image_raw",
-                self.depth_callback,
-                1,
-            )
             self.mecanum_pub.publish(Twist())
             self.enter = True
         response.success = True
@@ -465,30 +437,6 @@ class SelfDrivingNode(Node):
             self.image_queue.get()
         # put the image into the queue
         self.image_queue.put(rgb_image)
-
-    def depth_callback(self, ros_image):
-        # [방법1] 최신 뎁스 이미지 저장(16UC1=mm, 480x640). 주차 표지판 픽셀의 거리 샘플링용.
-        try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(ros_image, "16UC1")
-        except Exception as e:
-            self.get_logger().warn("depth cvt fail: %s" % str(e))
-
-    def sample_depth_mm(self, u, v, win=5):
-        # [방법1] (u,v) 픽셀 주변 win×win 창의 유효(>0) 뎁스 중앙값(mm). 없으면 0.
-        img = self.depth_image
-        if img is None:
-            return 0.0
-        h, w = img.shape[:2]
-        u = int(max(0, min(w - 1, u)))
-        v = int(max(0, min(h - 1, v)))
-        r = win // 2
-        patch = img[
-            max(0, v - r) : min(h, v + r + 1), max(0, u - r) : min(w, u + r + 1)
-        ].reshape(-1)
-        patch = patch[patch > 0]  # 0 = 뎁스 없음(구멍)
-        if patch.size == 0:
-            return 0.0
-        return float(np.median(patch))
 
     # parking processing
     def park_action(self):
@@ -754,23 +702,6 @@ class SelfDrivingNode(Node):
                         "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
                         % (self.park_x, self.park_area, self.park_min_area)
                     )
-                    # [방법1-1단계 계측] 표지판 픽셀의 뎁스(실거리)와 카메라기준 3D 위치 로그(주행 안 바꿈).
-                    #   depth_mm=표지판까지 거리(mm), fwd=전방거리(m), right=옆거리(m, +면 표지판이 우측).
-                    #   표지판을 알려진 거리(예 0.5m)에 놓고 이 값이 맞는지 = 뎁스-RGB 정렬/intrinsics 검증.
-                    depth_mm = self.sample_depth_mm(self.park_x, self.park_cy)
-                    if depth_mm > 0:
-                        z = depth_mm / 1000.0
-                        fwd = z
-                        right = (self.park_x - self.cam_cx) * z / self.cam_fx
-                        self.get_logger().info(
-                            "\033[1;46m[DEPTH] park_x=%d cy=%d depth=%.0fmm  fwd=%.2fm right=%.2fm\033[0m"
-                            % (self.park_x, self.park_cy, depth_mm, fwd, right)
-                        )
-                    else:
-                        self.get_logger().info(
-                            "\033[1;46m[DEPTH] park_x=%d cy=%d depth=NONE(구멍/정렬확인)\033[0m"
-                            % (self.park_x, self.park_cy)
-                        )
                 # [주차 트리거 - arm/fire] going_to_park(우회전 이후)에서만 동작.
                 #   좁은 FOV라 표지판을 주차 순간까지 계속 볼 수 없음 → '가까이서 한 번 arm → 우측 이탈 시 fire'.
                 #   표지판이 화면 우측 끝으로 사라지는 위치는 매번 거의 동일 → 착지가 일정해짐.
@@ -784,9 +715,6 @@ class SelfDrivingNode(Node):
                             and not self.park_armed
                         ):
                             self.park_armed = True
-                            self.park_arm_x = (
-                                self.park_x
-                            )  # [핵심] arm 시점 park_x 기록 → 발사는 '여기서 +전진량'
                             self.get_logger().info(
                                 "\033[1;41m=== PARK ARMED (area=%d, park_x=%d) ===\033[0m"
                                 % (self.park_area, self.park_x)
@@ -794,10 +722,7 @@ class SelfDrivingNode(Node):
                     else:
                         if self.count_park > 0:
                             self.count_park -= 1
-                    # ② fire: [변경] 절대 px가 아니라 'arm 후 표지판이 park_fire_advance 만큼 더 우측으로 이동'하면 발사.
-                    #   절대 px(exit_x)는 접근 옆거리에 따라 로봇 실제 위치가 달라 불일치했음(성공판 arm px434→fire507,
-                    #   실패판 arm px506→즉시 507). arm 후 '전진량'이 훨씬 일관적이라 항상 일정 접근 후 주차칸 도달.
-                    #   표지판이 프레임 밖으로 사라지면(gone) 그때도 발사(우측 이탈 = 로봇 근접).
+                    # ② fire: armed 이후 표지판이 우측 끝(park_x>exit_x)으로 가거나 연속으로 사라지면 주차 시작
                     if self.park_armed:
                         twist.linear.x = (
                             self.slow_down_speed
@@ -806,23 +731,11 @@ class SelfDrivingNode(Node):
                             self.park_gone_count += 1
                         else:
                             self.park_gone_count = 0
-                            self.park_last_x = (
-                                self.park_x
-                            )  # 마지막으로 본 park_x 기록(gone 판정용)
-                        advanced = (
-                            0 < self.park_x
-                            and self.park_x >= self.park_arm_x + self.park_fire_advance
-                        )
-                        # [수정] gone 발사는 '표지판이 실제 우측 끝(park_gone_min_x)까지 갔다가 사라졌을 때'만 인정.
-                        #   YOLO가 잠깐 놓친 dropout(마지막 park_x가 아직 중앙)일 땐 발사 안 함 → 조기주차 방지(Run2).
-                        real_exit = (
-                            self.park_gone_count >= self.park_gone_frames
-                            and self.park_last_x >= self.park_gone_min_x
-                        )
-                        if advanced or real_exit:
+                        right_edge = 0 < self.park_x and self.park_x > self.park_exit_x
+                        if right_edge or self.park_gone_count >= self.park_gone_frames:
                             self.get_logger().info(
-                                "\033[1;41m=== PARK START (fire: park_x=%d arm_x=%d gone=%d) ===\033[0m"
-                                % (self.park_x, self.park_arm_x, self.park_gone_count)
+                                "\033[1;41m=== PARK START (fire: park_x=%d gone=%d) ===\033[0m"
+                                % (self.park_x, self.park_gone_count)
                             )
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
@@ -1006,7 +919,6 @@ class SelfDrivingNode(Node):
         self.objects_info = msg.objects
         # [수정] 주차 표지판은 매 프레임 새로 판단(사라지면 0으로). 멀리서 한 번 본 값이 남아 오작동하던 문제 방지.
         self.park_x = -1
-        self.park_cy = -1
         self.park_area = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
@@ -1084,7 +996,6 @@ class SelfDrivingNode(Node):
                     if area > self.park_area:
                         self.park_area = area
                         self.park_x = center[0]
-                        self.park_cy = center[1]  # [방법1] 뎁스 샘플링용 중심 y
                 elif (
                     class_name == "red" or class_name == "green"
                 ):  # obtain the status of the traffic light
