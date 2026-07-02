@@ -197,6 +197,7 @@ class SelfDrivingNode(Node):
         self.accel_ramp_start_time = 0  # 가속 구간 시작 시간
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
         self.crosswalk_ignore_time = 0  # TODO 00 : 무시 시작 시간 → 추가
+        self.turn_guard_time = 0  # 우회전 트리거 가드 시간 (실제 정지/우회전 완료 때만 리셋, 구버전 강제무시는 리셋 안함)
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_box_height = (
             0  # YOLO box_height of closest crosswalk (proximity proxy)
@@ -289,6 +290,7 @@ class SelfDrivingNode(Node):
         if not crosswalk_hit:  # 정상 종료 시 횡단보도 재감지 방지
             self.crosswalk_ignore = True
             self.crosswalk_ignore_time = time.time()
+            self.turn_guard_time = time.time()  # 우회전 직후 false-turn 방지
             self.pre_slow_down = False
 
     def get_node_state(self, request, response):
@@ -535,6 +537,9 @@ class SelfDrivingNode(Node):
                             self.crosswalk_ignore_time = (
                                 time.time()
                             )  # TODO 00 : 무시 시작 시간 → 추가
+                            self.turn_guard_time = (
+                                time.time()
+                            )  # 실제 정지 재출발 → 우회전 가드 리셋
                             self.pre_slow_down = False
                             self.just_stopped_crosswalk = (
                                 True  # 구버전: 다음 횡단보도 강제 무시
@@ -564,6 +569,9 @@ class SelfDrivingNode(Node):
                                 self.crosswalk_ignore_time = (
                                     time.time()
                                 )  # TODO 00 : 무시 시작 시간 → 추가
+                                self.turn_guard_time = (
+                                    time.time()
+                                )  # 실제 정지 재출발 → 우회전 가드 리셋
                                 self.pre_slow_down = False
                                 self.just_stopped_crosswalk = (
                                     True  # 구버전: 다음 횡단보도 강제 무시
@@ -628,8 +636,8 @@ class SelfDrivingNode(Node):
                         and center_x[3]
                         == -1  # TODO : Box3 조건 제거 - 코너에서 Box3이 계속 살아있어 count 미도달 → Box4=Box5=-1만 요구하도록 완화
                         and center_x[4] == -1
-                        and time.time() - self.crosswalk_ignore_time
-                        > 1.1  # 1.8→0.5→1.1: 0.5로 줄이면 교차로 직후 false turn(0.8s), 1.8이면 camera26 코너 차단(1.5s)
+                        and time.time() - self.turn_guard_time
+                        > 1.1  # 실제 정지/우회전 완료 후 1.1s 가드 (구버전 강제무시는 타이머 리셋 안함 → 코너 직전 #2 감지 시 지연 방지)
                         and not self.pre_slow_down  # 횡단보도 접근 중 false turn 방지
                     ):
                         self.count_turn += 1  # TODO : drift 감지 제거 - 0.5m/s에서 진짜 코너 drift(88px)가 기준(70px) 초과해서 카운트 리셋되는 문제 → 수정
