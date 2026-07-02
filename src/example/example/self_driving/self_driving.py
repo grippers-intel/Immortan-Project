@@ -205,6 +205,18 @@ class SelfDrivingNode(Node):
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
         self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
+        self.turn_right_set_time = (
+            0  # turn_right가 True로 확정된 시각(아래 timeout 판단용)
+        )
+        # [1차 실차 테스트] 우회전 표지판을 인식하고도 그냥 직진한 문제: main()의 우회전
+        # 트리거가 "crosswalk_passed(직전 횡단보도를 정지 후 통과 완료)"를 필수 조건으로
+        # 요구했는데, 그 직전 횡단보도 검출이 오검출/끊김 등으로 끝내 완료되지 않으면
+        # crosswalk_passed가 영원히 False로 남아 표지판을 인식하고도 회전이 트리거되지
+        # 않았음(회전 시작 위치를 횡단보도 기준으로 정규화하려던 것뿐인데, 이게 실패하면
+        # 미션 자체를 통째로 건너뛰는 건 더 나쁨). turn_right가 확정된 뒤 이 시간(초)
+        # 이상 crosswalk_passed를 못 받으면 정규화를 포기하고 그냥 회전을 실행하도록
+        # 안전장치를 둠(위치 정규화는 execute_turn_right 내부의 타임아웃 로직이 대신 처리).
+        self.turn_right_wait_timeout = 2.0
 
         # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
         self.count_go = 0
@@ -280,12 +292,26 @@ class SelfDrivingNode(Node):
         )
         #   실제 횡단보도는 가로로 긴 줄무늬(가로≫세로)라 통과하고, 바닥 까진 자국은
         #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
+        # [1차 실차 테스트] 트랙의 작은 균열이 종종 area/aspect 필터를 통과해 횡단보도로
+        # 오검출됨(균열도 길쭉한 형태라 aspect 필터만으론 못 거름). YOLO 신뢰도(score)를
+        # 추가로 요구해 저신뢰 오검출을 걸러냄. 실제 횡단보도는 특징이 뚜렷해 score가 높음.
+        # 진짜 횡단보도까지 걸러지면 ↓, 균열이 계속 잡히면 ↑
+        self.crosswalk_min_score = 0.5
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
+        # [1차 실차 테스트] 횡단보도를 지나쳐서야 멈추는 문제의 원인: get_object_callback이
+        # 이 프레임에 crosswalk가 하나도 안 잡히면(YOLO 프레임 드랍/박스가 화면 하단에서
+        # 잠깐 잘리는 등) crosswalk_distance를 즉시 0으로 되돌렸음. main()의 정지 판단은
+        # "3프레임 연속으로 stop_dist 이상"을 요구하는데, 접근 중 단 한 프레임만 검출이
+        # 끊겨도 카운터가 0으로 리셋되길 반복하다 보니, 3프레임이 실제로 다 채워질 때는
+        # 이미 로봇이 물리적으로 횡단보도를 지난 뒤였음. red_close_time과 같은 '최근 검출
+        # 유지' 방식으로 바꿔, 짧은 검출 끊김에는 마지막 값을 hold_time 동안 유지하도록 함.
+        self.crosswalk_last_seen_time = 0
+        self.crosswalk_hold_time = 0.6  # 검출 끊김 허용 시간(초). CPU YOLO 프레임 간격보다 넉넉하게. 여전히 지나치면 ↑, 다음 횡단보도 리셋이 느리면 ↓
 
         # NOTE(competition): start_slow_down/slow_down_speed/crosswalk_length는 옛 "횡단보도+
         # 신호등 통합 감속" 로직에서 쓰던 값. main()을 규정6(횡단보도 무조건 정지)/규정9(신호등
@@ -680,13 +706,20 @@ class SelfDrivingNode(Node):
                     self.stop = False
 
                 # ---- 규정8: 우회전 표지판 확정 + 횡단보도를 막 지난 시점에 개방루프 우회전 실행 ----
+                # crosswalk_passed는 회전 시작 위치를 정규화하려는 용도일 뿐이라, 직전
+                # 횡단보도 검출이 끝내 실패해도(오검출 필터링/타이밍 등) 표지판을 인식한 채
+                # 그냥 지나쳐버리지 않도록 timeout이 지나면 이 조건 없이도 회전을 실행.
+                crosswalk_gate_ok = self.crosswalk_passed or (
+                    time.time() - self.turn_right_set_time
+                    > self.turn_right_wait_timeout
+                )
                 if (
                     self.turn_right
                     and not self.doing_turn_right
                     and not self.start_park
                     and not self.parked
                     and not self.stop
-                    and self.crosswalk_passed
+                    and crosswalk_gate_ok
                 ):
                     self.turn_right = False
                     self.doing_turn_right = True
@@ -897,14 +930,15 @@ class SelfDrivingNode(Node):
     # Obtain the target detection result
     def get_object_callback(self, msg):
         self.objects_info = msg.objects
+        found_crosswalk = False
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
-            self.crosswalk_distance = 0
         else:
             min_distance = 0
             for i in self.objects_info:
                 class_name = i.class_name
                 box = i.box
+                cls_conf = i.score
                 center = (int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2))
                 # 규정6/8/9 필터링에 쓰는 박스 크기(거리 지표) 및 종횡비
                 width = abs(box[2] - box[0])
@@ -913,12 +947,14 @@ class SelfDrivingNode(Node):
                 aspect = width / height if height > 0 else 0
 
                 if class_name == "crosswalk":
-                    # [종횡비/면적 필터] 규정6: 바닥 얼룩 등 오검출 제거, 실제 횡단보도
-                    # (가로로 긴 줄무늬)만 거리 판단에 반영
+                    # [면적/종횡비/신뢰도 필터] 규정6: 바닥 얼룩·균열 등 오검출 제거, 실제
+                    # 횡단보도(가로로 긴 줄무늬, 높은 신뢰도)만 거리 판단에 반영
                     if (
                         area >= self.crosswalk_min_area
                         and aspect >= self.crosswalk_min_aspect
+                        and cls_conf >= self.crosswalk_min_score
                     ):
+                        found_crosswalk = True
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
@@ -932,6 +968,8 @@ class SelfDrivingNode(Node):
                         if (
                             self.count_right >= 5
                         ):  # If it is detected multiple times, take the right turning sign to true
+                            if not self.turn_right:
+                                self.turn_right_set_time = time.time()
                             self.turn_right = True
                             self.count_right = 0
                 elif class_name == "go":
@@ -961,7 +999,16 @@ class SelfDrivingNode(Node):
                             self.red_close_time = time.time()
 
             self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
-            self.crosswalk_distance = min_distance
+            if found_crosswalk:
+                self.crosswalk_distance = min_distance
+                self.crosswalk_last_seen_time = time.time()
+
+        # [1차 실차 테스트] 이번 프레임에 크로스워크가 안 잡혀도(오검출 필터 탈락, YOLO
+        # 프레임 드랍 등) 바로 0으로 되돌리지 않고 hold_time 동안은 마지막 값을 유지.
+        # 짧은 검출 끊김 때문에 main()의 3프레임 연속 확인 카운터가 계속 리셋되어
+        # 정지 판단이 늦어지고, 그 결과 횡단보도를 지나친 뒤에야 멈추는 문제를 방지.
+        if time.time() - self.crosswalk_last_seen_time > self.crosswalk_hold_time:
+            self.crosswalk_distance = 0
 
 
 def main():
