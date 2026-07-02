@@ -15,6 +15,15 @@ import sdk.pid as pid
 import sdk.fps as fps
 from rclpy.node import Node
 import sdk.common as common
+# [빵판 LED] 다색 GPIO LED 드라이버(온보드 RGB와 동일 상태 표시). GPIO/하드웨어 없으면 import가 실패할 수
+#   있으므로 가드 — 실패해도 주행 노드는 정상 동작하고 빵판 LED만 비활성화된다.
+try:
+    import sdk.led as bb_led
+    _BB_LED_OK = True
+except Exception as _bb_e:
+    bb_led = None
+    _BB_LED_OK = False
+    print('[self_driving] breadboard LED disabled (import failed): %s' % _bb_e)
 # from app.common import Heart
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
@@ -145,9 +154,9 @@ class SelfDrivingNode(Node):
         self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
         self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.8    # 전진 이동 = fwd - 이 값. (0.1→0.5→0.8: 로그상 전진 1.06~1.42m로 주차칸을
-                                        #   넘어감 → 전진을 0.3m 더 줄임. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽.
-                                        #   여전히 넘으면 ↑(0.9~1.0), 못 미치면 ↓)
+        self.park_standoff_fwd = 0.95   # 전진 이동 = fwd - 이 값. (0.5→0.8→0.95: 로그상 전진 0.94~1.07m로 여전히
+                                        #   라인 넘음 → 전진을 더 줄임. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽.
+                                        #   여전히 넘으면 ↑(1.05~1.15), 못 미치면 ↓)
         self.park_standoff_right = 0.15 # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         self.odom_x = 0.0
         self.odom_y = 0.0
@@ -608,7 +617,28 @@ class SelfDrivingNode(Node):
         else:
             # 주행 → 녹색
             led1 = led2 = GREEN
-        self.publish_leds(led1, led2)
+        self.publish_leds(led1, led2)      # 온보드 RGB (기존 그대로)
+        self.update_breadboard_leds()      # [빵판] 온보드와 동일한 상태로 함께 표시
+
+    # [빵판 LED] 온보드 LED와 '동일한' 상태를 빵판 다색 LED로도 표시.
+    #   온보드(update_leds)의 판정 순서와 동일하게 매핑. set_mode 가드가 있어 매 프레임 호출해도 안전(논블로킹).
+    #   매핑: 주차완료=전체점멸 / 정지·대기=빨강 / 우회전=우측노랑점멸 / 직진표지판=양쪽노랑점멸 / 주행=초록.
+    def update_breadboard_leds(self):
+        if not _BB_LED_OK:
+            return
+        try:
+            if self.parked:
+                bb_led.mode_park_done()
+            elif self.stop:
+                bb_led.mode_stop()
+            elif self.doing_turn_right or self.turn_right:
+                bb_led.mode_turn_right()
+            elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
+                bb_led.mode_go()
+            else:
+                bb_led.mode_straight()
+        except Exception as e:
+            self.get_logger().warn('breadboard LED error: %s' % str(e))
 
     def main(self):
         while self.is_running:
@@ -626,6 +656,11 @@ class SelfDrivingNode(Node):
                 self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
             else:
                 self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
+                if _BB_LED_OK:  # [빵판] 대기 중에도 온보드와 동일하게 빨강
+                    try:
+                        bb_led.mode_stop()
+                    except Exception:
+                        pass
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
@@ -909,6 +944,11 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
+        if _BB_LED_OK:  # [빵판] 종료 시 소등
+            try:
+                bb_led.all_off()
+            except Exception:
+                pass
         rclpy.shutdown()
 
 
