@@ -291,12 +291,14 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 260  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        self.crosswalk_stop_dist = 290  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
         #   (210→320: 횡단보도가 y≈300에 처음 잡혀 바로 멈춰 '약간 일찍'이던 것 →
         #    더 가까이(320)서 멈춤. 지나치면 ↓, 여전히 이르면 ↑)
         #   [4차 실차 테스트] 320은 반대로 "탐지는 됐지만 제대로 멈추지 못함" 증상의
         #   원인 중 하나로 보임 - 정지 확정까지 필요한 여유 프레임이 부족했음. 320→260으로
         #   낮춰 더 멀리서부터 정지 판단을 시작하게 해 확정까지 걸리는 시간을 벌어줌.
+        #   [6차 실차 테스트] 이번엔 반대로 "너무 일찍 멈춘다"는 피드백 -> 260→290으로
+        #   살짝 다시 올림(320과 260의 중간). 그래도 이르면 좀 더 ↑, 다시 못 멈추면 ↓
         self.crosswalk_min_area = (
             1400  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
         )
@@ -392,7 +394,13 @@ class SelfDrivingNode(Node):
         self.lane_deadband = 10
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
-        self.turn_confirm_count = 5
+        # [6차 실차 테스트, docs/test3_log.txt 분석] 모든 코너에서 우회전이 안 되는 원인을
+        # near_x/lane_x 진단 로그로 확인: 실제 코너에서 near_x가 turn_threshold(200)를
+        # 넘는 건 매번 딱 1프레임뿐이고, 바로 다음 프레임에 차선을 완전히 놓쳐(near_x=-1)
+        # count_turn이 5(구 값)까지 쌓일 기회가 전혀 없었음(count_turn=1에서 멈춤).
+        # 5 -> 1로 낮춰 1프레임만 넘어도 즉시 회전 시작하도록 함(아래 count_turn 비교도
+        # >에서 >=로 수정).
+        self.turn_confirm_count = 1
         # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
         #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
         #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
@@ -918,7 +926,7 @@ class SelfDrivingNode(Node):
                     if near_x > self.turn_threshold:
                         self.count_turn += 1
                         if (
-                            self.count_turn > self.turn_confirm_count
+                            self.count_turn >= self.turn_confirm_count
                             and not self.start_turn
                         ):
                             self.start_turn = True
