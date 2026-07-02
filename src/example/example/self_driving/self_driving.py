@@ -129,7 +129,15 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
+        self.park_cy = -1        # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
+        # [방법1] 뎁스 기반 주차용: 최신 뎁스 이미지 + RGB 카메라 내부파라미터(ascamera rgb0/camera_info 실측값).
+        #   픽셀(u,v)+뎁스Z → 카메라기준 3D: X=(u-cx)Z/fx(우측+), Z=전방거리. 옆거리=X, 앞거리=Z.
+        self.depth_image = None
+        self.cam_fx = 574.997
+        self.cam_fy = 574.445
+        self.cam_cx = 332.225
+        self.cam_cy = 240.753
         self.park_min_area = 400   # arm(주차 준비) 최소 면적. (700→400: 700은 arm이 늦어 발사가 px560대로 밀려
                                    #   forward와 겹쳐 표지판 넘어뜨림. 400이면 arm 일찍 완료→발사 px≈505로 일관(4연속 테스트값).
                                    #   멀리 작은 표지판(area 352)은 여전히 거름. 너무 일찍이면 ↑, arm 안되면 ↓)
@@ -290,6 +298,8 @@ class SelfDrivingNode(Node):
             camera = 'depth_cam'#self.get_parameter('depth_camera_name').value
             self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.image_callback, 1)
             self.create_subscription(ObjectsInfo, '/yolov5_ros2/object_detect', self.get_object_callback, 1)
+            # [방법1-1단계] 뎁스(16UC1=mm) 구독. 주차 표지판 픽셀의 실제 거리 읽어 3D 위치 계산(로그 검증용).
+            self.create_subscription(Image, '/ascamera/camera_publisher/depth0/image_raw', self.depth_callback, 1)
             self.mecanum_pub.publish(Twist())
             self.enter = True
         response.success = True
@@ -380,7 +390,28 @@ class SelfDrivingNode(Node):
             self.image_queue.get()
         # put the image into the queue
         self.image_queue.put(rgb_image)
-    
+
+    def depth_callback(self, ros_image):
+        # [방법1] 최신 뎁스 이미지 저장(16UC1=mm, 480x640). 주차 표지판 픽셀의 거리 샘플링용.
+        try:
+            self.depth_image = self.bridge.imgmsg_to_cv2(ros_image, "16UC1")
+        except Exception as e:
+            self.get_logger().warn('depth cvt fail: %s' % str(e))
+
+    def sample_depth_mm(self, u, v, win=5):
+        # [방법1] (u,v) 픽셀 주변 win×win 창의 유효(>0) 뎁스 중앙값(mm). 없으면 0.
+        img = self.depth_image
+        if img is None:
+            return 0.0
+        h, w = img.shape[:2]
+        u = int(max(0, min(w - 1, u))); v = int(max(0, min(h - 1, v)))
+        r = win // 2
+        patch = img[max(0, v - r):min(h, v + r + 1), max(0, u - r):min(w, u + r + 1)].reshape(-1)
+        patch = patch[patch > 0]     # 0 = 뎁스 없음(구멍)
+        if patch.size == 0:
+            return 0.0
+        return float(np.median(patch))
+
     # parking processing
     def park_action(self):
         if self.machine_type == 'MentorPi_Mecanum':
@@ -596,6 +627,19 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                         self.park_x, self.park_area, self.park_min_area))
+                    # [방법1-1단계 계측] 표지판 픽셀의 뎁스(실거리)와 카메라기준 3D 위치 로그(주행 안 바꿈).
+                    #   depth_mm=표지판까지 거리(mm), fwd=전방거리(m), right=옆거리(m, +면 표지판이 우측).
+                    #   표지판을 알려진 거리(예 0.5m)에 놓고 이 값이 맞는지 = 뎁스-RGB 정렬/intrinsics 검증.
+                    depth_mm = self.sample_depth_mm(self.park_x, self.park_cy)
+                    if depth_mm > 0:
+                        z = depth_mm / 1000.0
+                        fwd = z
+                        right = (self.park_x - self.cam_cx) * z / self.cam_fx
+                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=%.0fmm  fwd=%.2fm right=%.2fm\033[0m' % (
+                            self.park_x, self.park_cy, depth_mm, fwd, right))
+                    else:
+                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=NONE(구멍/정렬확인)\033[0m' % (
+                            self.park_x, self.park_cy))
                 # [주차 트리거 - arm/fire] going_to_park(우회전 이후)에서만 동작.
                 #   좁은 FOV라 표지판을 주차 순간까지 계속 볼 수 없음 → '가까이서 한 번 arm → 우측 이탈 시 fire'.
                 #   표지판이 화면 우측 끝으로 사라지는 위치는 매번 거의 동일 → 착지가 일정해짐.
@@ -759,6 +803,7 @@ class SelfDrivingNode(Node):
         self.objects_info = msg.objects
         # [수정] 주차 표지판은 매 프레임 새로 판단(사라지면 0으로). 멀리서 한 번 본 값이 남아 오작동하던 문제 방지.
         self.park_x = -1
+        self.park_cy = -1
         self.park_area = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
@@ -811,6 +856,7 @@ class SelfDrivingNode(Node):
                     if area > self.park_area:
                         self.park_area = area
                         self.park_x = center[0]
+                        self.park_cy = center[1]   # [방법1] 뎁스 샘플링용 중심 y
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                     if class_name == 'red':
