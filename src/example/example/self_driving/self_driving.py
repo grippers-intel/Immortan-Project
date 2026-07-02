@@ -659,7 +659,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 250  # TODO 도로 중앙값 조절 (245->230->250: 너무 왼쪽에 붙어서 우측 이동)
+                            self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230->250->230: 250+클램프0.18 동시변경으로 과보정, 일단 원복)
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
@@ -674,8 +674,8 @@ class SelfDrivingNode(Node):
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
-                                        self.pid.output, -0.18, 0.18
-                                    )  # TODO : 0.18->0.13->0.18 복원, 0.13은 왼쪽 드리프트 보정 불가 (클램프에서 막혀 SetPoint 조정도 효과 없음)
+                                        self.pid.output, -0.13, 0.13
+                                    )  # TODO : 0.18->0.13->0.18->0.13 복원, SetPoint+클램프 동시변경으로 과보정 → 클램프만 원복
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
