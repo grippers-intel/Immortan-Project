@@ -156,7 +156,8 @@ class SelfDrivingNode(Node):
         self.count_go = 0
         self.go_signal_time = 0          # 직진 표지판 마지막 인식 시각
         self.go_signal_duration = 3.0    # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
-        self.last_led_state = None       # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
+        self.last_led_state = None      
+        self._last_gpio_mode = None      # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
@@ -498,31 +499,65 @@ class SelfDrivingNode(Node):
 
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
+    # def update_leds(self):
+    #     GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
+    #     blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
+    #     if self.parked:
+    #         # 주차 완료 → 모든 LED 점멸
+    #         c = YELLOW if blink else OFF
+    #         led1 = led2 = c
+    #     elif self.stop:
+    #         # 정지 → 빨강
+    #         led1 = led2 = RED
+    #         led.mode_stop() #TODO:
+    #     elif self.doing_turn_right or self.turn_right:
+    #         # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
+    #         led1 = OFF
+    #         led2 = YELLOW if blink else OFF
+    #         led.mode_turn_right() #TODO:
+    #     elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
+    #         # 직진 표지판 인식 → 양쪽 노란 점멸
+    #         led1 = led2 = YELLOW if blink else OFF
+    #         led.mode_turn_right() #TODO:
+    #     else:
+    #         # 주행 → 녹색
+    #         led1 = led2 = GREEN
+    #         led.mode_straight() #TODO:
+    #     self.publish_leds(led1, led2)
     def update_leds(self):
-        GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
-        if self.parked:
-            # 주차 완료 → 모든 LED 점멸
-            c = YELLOW if blink else OFF
-            led1 = led2 = c
-        elif self.stop:
-            # 정지 → 빨강
-            led1 = led2 = RED
-            led.mode_stop() #TODO:
-        elif self.doing_turn_right or self.turn_right:
-            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-            led1 = OFF
-            led2 = YELLOW if blink else OFF
-            led.mode_turn_right() #TODO:
-        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-            # 직진 표지판 인식 → 양쪽 노란 점멸
-            led1 = led2 = YELLOW if blink else OFF
-            led.mode_turn_right() #TODO:
-        else:
-            # 주행 → 녹색
-            led1 = led2 = GREEN
-            led.mode_straight() #TODO:
-        self.publish_leds(led1, led2)
+    GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
+    blink = int(time.time() / 0.3) % 2 == 0
+
+    if self.parked:
+        c = YELLOW if blink else OFF
+        led1 = led2 = c
+        new_mode = 'park_done'
+    elif self.stop:
+        led1 = led2 = RED
+        new_mode = 'stop'
+    elif self.doing_turn_right or self.turn_right:
+        led1 = OFF
+        led2 = YELLOW if blink else OFF
+        new_mode = 'turn_right'
+    elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
+        led1 = led2 = YELLOW if blink else OFF
+        new_mode = 'go'
+    else:
+        led1 = led2 = GREEN
+        new_mode = 'straight'
+
+    # [핵심] 모드가 바뀔 때만 GPIO LED 호출 (매 프레임 호출 방지)
+    if new_mode != self._last_gpio_mode:
+        self._last_gpio_mode = new_mode
+        if new_mode == 'stop':
+            led.mode_stop()
+        elif new_mode == 'turn_right':
+            led.mode_turn_right()
+        elif new_mode == 'straight' or new_mode == 'go':
+            led.mode_straight()
+        # park_done은 park_action()에서 처리
+
+    self.publish_leds(led1, led2)
 
 
     def main(self):
