@@ -80,6 +80,7 @@ class SelfDrivingNode(Node):
             SetPWMServoState, "ros_robot_controller/pwm_servo/set_state", 1
         )
         self.result_publisher = self.create_publisher(Image, "~/image_result", 1)
+        self.binary_publisher = self.create_publisher(Image, "~/image_binary", 1)
         self.rgb_pub = self.create_publisher(
             RGBStates, "/ros_robot_controller/set_rgb", 10
         )
@@ -407,6 +408,12 @@ class SelfDrivingNode(Node):
                     continue
 
             result_image = image.copy()
+            binary_image = self.lane_detect.get_binary(
+                image
+            )  # 대기 중에도 바이너리 발행용
+            self.binary_publisher.publish(
+                self.bridge.cv2_to_imgmsg(binary_image, "mono8")
+            )
             if self.start:
                 # TODO 01 : 시작 딜레이를 가장 먼저 체크
                 if self.start_delay:
