@@ -247,6 +247,11 @@ class SelfDrivingNode(Node):
         self.crosswalk_stop_time = 0        # 정지 시작 시각
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
+        # [시작 신호등] 출발 버튼을 눌러도, 시작 지점 신호등이 '빨강'이면 출발하지 않고 대기.
+        #   빨강이 꺼지면(초록/사라짐) 출발. 두번째 신호등과 동일한 '빨강 신선도(is_red)' 기준 사용.
+        #   started_moving: 최초 출발을 마쳤는가. False인 동안만 이 시작 게이트가 활성(이후엔 기존 로직만).
+        self.started_moving = False
+
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
@@ -693,7 +698,12 @@ class SelfDrivingNode(Node):
                 #   crosswalk_distance가 요동쳐도(예: 454→316→337) 정지가 풀리지 않게 함. 예전엔 316처럼
                 #   임계값 아래로 잠깐 떨어지면 정지가 한 프레임 풀려 차선추종이 로봇을 앞으로 밀어 '덜컥'거림.
                 #   정지는 stopped_enough(2초) 후 passed=True 될 때만 해제된다.
-                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close or self.crosswalk_stopping) and not self.crosswalk_passed:
+                # [시작 신호등 게이트] 아직 최초 출발 전(started_moving=False)인데 빨강(is_red)이면 → 정지 유지.
+                #   red_close(가까운 빨강)보다 민감한 is_red(모든 빨강)를 써서 시작선 신호등이 멀어도 확실히 대기.
+                #   두번째 신호등과 동일하게, stopped_enough(2초) 지나고 빨강이 꺼지면 통과한다(아래 해제 로직 공용).
+                start_red_gate = (not self.started_moving and is_red)
+                if (self.crosswalk_distance > self.crosswalk_stop_dist or red_close
+                        or self.crosswalk_stopping or start_red_gate) and not self.crosswalk_passed:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
@@ -707,6 +717,7 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
                         self.crosswalk_stopping = False
                         self.stop = False
+                        self.started_moving = True     # [시작 신호등] 최초 출발 완료 → 이후 시작 게이트 비활성
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
                         #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
                         #   재무장돼 주차 중에 두 번째 우회전이 실행되어 주차를 망치던 버그 방지.
@@ -723,6 +734,10 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = False
                         self.crosswalk_stopping = False
                     self.stop = False
+                    # [시작 신호등] 시작선에서 빨강이 아니면(초록/무신호) 그냥 출발 → 최초 출발 완료 표시.
+                    #   (YOLO는 대기 중에도 돌아 red_last_seen_time을 갱신하므로 is_red가 정확 → 조기표시 위험 없음)
+                    if not self.started_moving and not is_red:
+                        self.started_moving = True
 
                 # [추가] 횡단보도 접근 감속: 검출됐고(거리≥approach_dist) 아직 통과/정지 전이면 미리 감속해
                 #   정지 명령 후 관성 오버슛을 줄인다. 특히 출발 직후 '바로 앞' 횡단보도는 늦게(가까이서)
