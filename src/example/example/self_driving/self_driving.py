@@ -17,6 +17,7 @@ from rclpy.node import Node
 import sdk.common as common
 # from app.common import Heart
 from cv_bridge import CvBridge
+import sdk.led as led
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 from interfaces.msg import ObjectsInfo
@@ -129,15 +130,7 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
-        self.park_cy = -1        # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        # [방법1] 뎁스 기반 주차용: 최신 뎁스 이미지 + RGB 카메라 내부파라미터(ascamera rgb0/camera_info 실측값).
-        #   픽셀(u,v)+뎁스Z → 카메라기준 3D: X=(u-cx)Z/fx(우측+), Z=전방거리. 옆거리=X, 앞거리=Z.
-        self.depth_image = None
-        self.cam_fx = 574.997
-        self.cam_fy = 574.445
-        self.cam_cx = 332.225
-        self.cam_cy = 240.753
         self.park_min_area = 400   # arm(주차 준비) 최소 면적. (700→400: 700은 arm이 늦어 발사가 px560대로 밀려
                                    #   forward와 겹쳐 표지판 넘어뜨림. 400이면 arm 일찍 완료→발사 px≈505로 일관(4연속 테스트값).
                                    #   멀리 작은 표지판(area 352)은 여전히 거름. 너무 일찍이면 ↑, arm 안되면 ↓)
@@ -159,8 +152,6 @@ class SelfDrivingNode(Node):
                                        #   주차칸 전에 서면 ↑, 넘어가면 ↓
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
-        self.park_last_x = 0           # 마지막으로 본 park_x (gone이 진짜 우측 이탈인지 dropout인지 구분용)
-        self.park_gone_min_x = 540     # gone 발사 인정 최소 last_x. 이보다 낮은데 사라지면 YOLO dropout으로 보고 무시
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 230  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215→230: 막판 우측 바퀴가
                                        #   라인 밟아 조금 더 좌측 유지. 우측 바퀴 계속 밟으면 ↑, 좌측으로 치우치면 ↓)
@@ -181,12 +172,15 @@ class SelfDrivingNode(Node):
         self.go_signal_time = 0          # 직진 표지판 마지막 인식 시각
         self.go_signal_duration = 3.0    # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
         self.last_led_state = None       # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
+        self.led_update_interval = 0.1   # LED 갱신 빈도 제한(초). 너무 자주 갱신하면 제어 루프 부담이 커짐.
+        self.last_led_update_time = 0.0  # 마지막 LED 갱신 시각
+        self.current_led_mode = None     # 현재 LED 모드(상태 변화 시에만 실제 GPIO 갱신)
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
-        self.turn_right_forward_time = 0.9  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+        self.turn_right_forward_time = 0.01  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
                                             #   (0.8→1.1→0.9: 늦게 진입해 왼쪽 앞바퀴가 라인 밟음 → 조금 일찍 회전)
         self.turn_right_duration = 3.3   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
                                          #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
@@ -226,7 +220,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False       # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.normal_speed = 0.3  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
@@ -298,8 +292,6 @@ class SelfDrivingNode(Node):
             camera = 'depth_cam'#self.get_parameter('depth_camera_name').value
             self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.image_callback, 1)
             self.create_subscription(ObjectsInfo, '/yolov5_ros2/object_detect', self.get_object_callback, 1)
-            # [방법1-1단계] 뎁스(16UC1=mm) 구독. 주차 표지판 픽셀의 실제 거리 읽어 3D 위치 계산(로그 검증용).
-            self.create_subscription(Image, '/ascamera/camera_publisher/depth0/image_raw', self.depth_callback, 1)
             self.mecanum_pub.publish(Twist())
             self.enter = True
         response.success = True
@@ -390,28 +382,7 @@ class SelfDrivingNode(Node):
             self.image_queue.get()
         # put the image into the queue
         self.image_queue.put(rgb_image)
-
-    def depth_callback(self, ros_image):
-        # [방법1] 최신 뎁스 이미지 저장(16UC1=mm, 480x640). 주차 표지판 픽셀의 거리 샘플링용.
-        try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(ros_image, "16UC1")
-        except Exception as e:
-            self.get_logger().warn('depth cvt fail: %s' % str(e))
-
-    def sample_depth_mm(self, u, v, win=5):
-        # [방법1] (u,v) 픽셀 주변 win×win 창의 유효(>0) 뎁스 중앙값(mm). 없으면 0.
-        img = self.depth_image
-        if img is None:
-            return 0.0
-        h, w = img.shape[:2]
-        u = int(max(0, min(w - 1, u))); v = int(max(0, min(h - 1, v)))
-        r = win // 2
-        patch = img[max(0, v - r):min(h, v + r + 1), max(0, u - r):min(w, u + r + 1)].reshape(-1)
-        patch = patch[patch > 0]     # 0 = 뎁스 없음(구멍)
-        if patch.size == 0:
-            return 0.0
-        return float(np.median(patch))
-
+    
     # parking processing
     def park_action(self):
         if self.machine_type == 'MentorPi_Mecanum':
@@ -517,26 +488,32 @@ class SelfDrivingNode(Node):
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
     def update_leds(self):
-        GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
+        now = time.time()
+        if now - self.last_led_update_time < self.led_update_interval and self.current_led_mode is not None:
+            return
+        self.last_led_update_time = now
+
         if self.parked:
-            # 주차 완료 → 모든 LED 점멸
-            c = YELLOW if blink else OFF
-            led1 = led2 = c
+            desired_mode = 'park_done'
         elif self.stop:
-            # 정지 → 빨강
-            led1 = led2 = RED
-        elif self.doing_turn_right or self.turn_right:
-            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-            led1 = OFF
-            led2 = YELLOW if blink else OFF
-        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-            # 직진 표지판 인식 → 양쪽 노란 점멸
-            led1 = led2 = YELLOW if blink else OFF
+            desired_mode = 'stop'
+        elif self.turn_right or self.doing_turn_right:
+            desired_mode = 'turn_right'
         else:
-            # 주행 → 녹색
-            led1 = led2 = GREEN
-        self.publish_leds(led1, led2)
+            desired_mode = 'straight'
+
+        if self.current_led_mode == desired_mode:
+            return
+
+        self.current_led_mode = desired_mode
+        if desired_mode == 'park_done':
+            led.mode_park_done()
+        elif desired_mode == 'stop':
+            led.mode_stop()
+        elif desired_mode == 'turn_right':
+            led.mode_turn_right()
+        else:
+            led.mode_straight()
 
     def main(self):
         while self.is_running:
@@ -551,7 +528,7 @@ class SelfDrivingNode(Node):
 
             result_image = image.copy()
             if self.start:
-                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(상태 변화/간격 제한)
             else:
                 self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
@@ -627,19 +604,6 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                         self.park_x, self.park_area, self.park_min_area))
-                    # [방법1-1단계 계측] 표지판 픽셀의 뎁스(실거리)와 카메라기준 3D 위치 로그(주행 안 바꿈).
-                    #   depth_mm=표지판까지 거리(mm), fwd=전방거리(m), right=옆거리(m, +면 표지판이 우측).
-                    #   표지판을 알려진 거리(예 0.5m)에 놓고 이 값이 맞는지 = 뎁스-RGB 정렬/intrinsics 검증.
-                    depth_mm = self.sample_depth_mm(self.park_x, self.park_cy)
-                    if depth_mm > 0:
-                        z = depth_mm / 1000.0
-                        fwd = z
-                        right = (self.park_x - self.cam_cx) * z / self.cam_fx
-                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=%.0fmm  fwd=%.2fm right=%.2fm\033[0m' % (
-                            self.park_x, self.park_cy, depth_mm, fwd, right))
-                    else:
-                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=NONE(구멍/정렬확인)\033[0m' % (
-                            self.park_x, self.park_cy))
                 # [주차 트리거 - arm/fire] going_to_park(우회전 이후)에서만 동작.
                 #   좁은 FOV라 표지판을 주차 순간까지 계속 볼 수 없음 → '가까이서 한 번 arm → 우측 이탈 시 fire'.
                 #   표지판이 화면 우측 끝으로 사라지는 위치는 매번 거의 동일 → 착지가 일정해짐.
@@ -666,12 +630,8 @@ class SelfDrivingNode(Node):
                             self.park_gone_count += 1
                         else:
                             self.park_gone_count = 0
-                            self.park_last_x = self.park_x      # 마지막으로 본 park_x 기록(gone 판정용)
                         advanced = (0 < self.park_x and self.park_x >= self.park_arm_x + self.park_fire_advance)
-                        # [수정] gone 발사는 '표지판이 실제 우측 끝(park_gone_min_x)까지 갔다가 사라졌을 때'만 인정.
-                        #   YOLO가 잠깐 놓친 dropout(마지막 park_x가 아직 중앙)일 땐 발사 안 함 → 조기주차 방지(Run2).
-                        real_exit = (self.park_gone_count >= self.park_gone_frames and self.park_last_x >= self.park_gone_min_x)
-                        if advanced or real_exit:
+                        if advanced or self.park_gone_count >= self.park_gone_frames:
                             self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d arm_x=%d gone=%d) ===\033[0m' % (
                                 self.park_x, self.park_arm_x, self.park_gone_count))
                             self.mecanum_pub.publish(Twist())
@@ -795,7 +755,9 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
+        led.cleanup()
         rclpy.shutdown()
+        
 
 
     # Obtain the target detection result
@@ -803,7 +765,6 @@ class SelfDrivingNode(Node):
         self.objects_info = msg.objects
         # [수정] 주차 표지판은 매 프레임 새로 판단(사라지면 0으로). 멀리서 한 번 본 값이 남아 오작동하던 문제 방지.
         self.park_x = -1
-        self.park_cy = -1
         self.park_area = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
@@ -856,7 +817,6 @@ class SelfDrivingNode(Node):
                     if area > self.park_area:
                         self.park_area = area
                         self.park_x = center[0]
-                        self.park_cy = center[1]   # [방법1] 뎁스 샘플링용 중심 y
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                     if class_name == 'red':
@@ -879,5 +839,3 @@ def main():
  
 if __name__ == "__main__":
     main()
-
-    
