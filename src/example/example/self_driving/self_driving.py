@@ -19,7 +19,6 @@ import sdk.common as common
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
 from interfaces.msg import ObjectsInfo
 from std_srvs.srv import SetBool, Trigger
 from sdk.common import colors, plot_one_box
@@ -47,7 +46,7 @@ class SelfDrivingNode(Node):
         # [② 우회전 후 복귀용 PID] 직진용 self.pid(0.01)는 휘청 방지로 아주 약함 → 회전 직후 우측라인으로
         #   당겨오는 힘이 부족. going_to_park 우측라인 추종은 더 단단한 전용 게인을 씀(파고듦 빠르게 복구).
         #   여전히 파고들면 P ↑, 우측라인 넘어 반대로 튀면 P ↓.
-        self.pid_park = pid.PID(0.012, 0.0, 0.003)  # (0.02→0.012: 느린 접근속도에서 과보정→우측 라인 넘던 것 완화)
+        self.pid_park = pid.PID(0.02, 0.0, 0.003)
         self.param_init()
 
         self.fps = fps.FPS()  
@@ -75,15 +74,8 @@ class SelfDrivingNode(Node):
 
         # [스위치 출발] 온보드 버튼(확장보드 key1/key2)으로 주행 시작.
         #   버튼 이벤트는 /ros_robot_controller/button 으로 발행됨(ButtonState: id=1/2, state).
-        #   규칙: 스위치로 출발(자동출발 -5 감점 방지).
-        #   - 한 번 누름  → 주행 시작 (스탠바이 상태일 때)
-        #   - 두 번 누름  → 스탠바이로 리셋(처음 상태로 되돌림) → 재테스트 편의
-        #   [주의] 단일/더블 구분을 위해 press 후 double_press_window(초) 동안 두 번째 press를 기다림 →
-        #          '한 번 누름' 출발엔 그만큼(약 0.5초) 지연이 생김.
+        #   규칙: 스위치로 출발(자동출발 -5 감점 방지). 버튼 누르면 button_callback에서 self.start=True.
         self.create_subscription(ButtonState, '/ros_robot_controller/button', self.button_callback, 1)
-        self._last_press_time = 0.0        # 마지막 press 시각(더블 판정용)
-        self.double_press_window = 0.5     # 이 시간(초) 안에 두 번 누르면 더블프레스로 인정
-        self._pending_single_timer = None  # 단일 press 지연 실행 타이머(더블 오면 취소)
 
         self.create_service(Trigger, '~/enter', self.enter_srv_callback) # enter the game
         self.create_service(Trigger, '~/exit', self.exit_srv_callback) # exit the game
@@ -130,54 +122,14 @@ class SelfDrivingNode(Node):
         self.detect_turn_right = False
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
-        self.park_cy = -1        # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        # [방법1] 뎁스 기반 주차용: 최신 뎁스 이미지 + RGB 카메라 내부파라미터(ascamera rgb0/camera_info 실측값).
-        #   픽셀(u,v)+뎁스Z → 카메라기준 3D: X=(u-cx)Z/fx(우측+), Z=전방거리. 옆거리=X, 앞거리=Z.
-        self.depth_image = None
-        self.cam_fx = 574.997
-        self.cam_fy = 574.445
-        self.cam_cx = 332.225
-        self.cam_cy = 240.753
-        self.park_depth_m = 0.0     # 최근 프레임 표지판까지 전방거리(m). 0=미검출
-        self.park_right_m = 0.0     # 최근 프레임 표지판 옆거리(m, +=우측)
-        # [방법1 - 2단계] 뎁스로 표지판 (fwd, right) 미터를 얻어 메카넘+오도메트리로 정위치 이동.
-        self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
-        self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
-        self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.7    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
-                                        #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
-        self.park_standoff_right = 0.15 # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
-        self.odom_x = 0.0
-        self.odom_y = 0.0
-        self.park_min_area = 400   # arm(주차 준비) 최소 면적. (700→400: 700은 arm이 늦어 발사가 px560대로 밀려
-                                   #   forward와 겹쳐 표지판 넘어뜨림. 400이면 arm 일찍 완료→발사 px≈505로 일관(4연속 테스트값).
-                                   #   멀리 작은 표지판(area 352)은 여전히 거름. 너무 일찍이면 ↑, arm 안되면 ↓)
-        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
-                                      #   (0.8→1.2→1.0: 0.8은 짧고 1.2는 넘어감(표지판 침). 발사 px≈505 기준 중간값 1.0.
-                                      #    여전히 짧으면 ↑(1.1), 넘어가면 ↓(0.9))
+        self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+                                   #   (실측 로그 기반으로 1200 설정)
+        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
-        # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
-        self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
-        self.park_lateral_dist = 0.4   # 횡이동 거리(m). (0.32→0.4: 우측 진입이 모자라 증가. 더 깊으면 ↓, 덜 들어가면 ↑)
-        # [주차 트리거 - arm/fire] ① 표지판이 가까이(area>min) 보이면 arm(+arm 시점 park_x 기록)
-        #   ② arm 후 표지판이 park_fire_advance 만큼 더 우측으로 이동하면(=로봇이 그만큼 접근) fire.
-        #   절대 px가 아니라 'arm 후 전진량'을 쓰는 이유: 접근 옆거리가 매번 달라 같은 px라도 로봇 실제 위치가
-        #   달랐음(성공판 arm px434→fire507, 실패판 arm px506→즉시 507로 조기주차). 전진량은 훨씬 일관적.
-        self.park_armed = False        # 표지판을 가까이서 충분히 봤다(주차 준비 완료)
-        self.park_arm_frames = 3       # park_area>min 이 이 프레임 수 이상이면 arm
-        self.park_arm_x = 0            # arm 된 시점의 park_x (발사 기준점)
-        self.park_fire_advance = 70    # arm 후 park_x가 이만큼 더 커지면(우측 이동=접근) 발사. (성공판 434→507=73px 기준)
-                                       #   주차칸 전에 서면 ↑, 넘어가면 ↓
-        self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
-        self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
-        self.park_last_x = 0           # 마지막으로 본 park_x (gone이 진짜 우측 이탈인지 dropout인지 구분용)
-        self.park_gone_min_x = 540     # gone 발사 인정 최소 last_x. 이보다 낮은데 사라지면 YOLO dropout으로 보고 무시
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
-        self.park_lane_setpoint = 230  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215→230: 막판 우측 바퀴가
-                                       #   라인 밟아 조금 더 좌측 유지. 우측 바퀴 계속 밟으면 ↑, 좌측으로 치우치면 ↓)
-        self.park_angular_limit = 0.25 # [②] 우회전 후 우측라인 복구 각속도 제한. (0.4→0.25: 느린 접근속도(0.1)에서
-                                       #   0.4는 반경 0.25m로 너무 급회전→오버슛으로 우측 라인 넘음. 파고듦 복구 약하면 ↑)
+        self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
+        self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -198,16 +150,15 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
         self.turn_right_speed = 0.15     # 우회전 시 전진 속도
         self.turn_right_angular = -0.5   # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
-        self.turn_right_forward_time = 0.9  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
-                                            #   (0.8→1.1→0.9: 늦게 진입해 왼쪽 앞바퀴가 라인 밟음 → 조금 일찍 회전)
+        self.turn_right_forward_time = 1.1  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+                                            #   (0.8→1.1: 조금 일찍 돌아 안쪽 라인 밟던 것 → 더 들어간 뒤 회전)
         self.turn_right_duration = 3.3   # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
                                          #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
                                          #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
         # [③ 시작점 정규화] 우회전은 개방루프라 정지 위치가 매번 달라지면 도착 라인도 달라짐.
         #   최소 직진(turn_right_forward_time) 후, 횡단보도가 완전히 지나갈 때까지(거리<pass_dist) 추가 전진 →
         #   항상 '횡단보도를 막 지난 지점'에서 회전 시작 → 시작점 일정. (검출 실패 대비 타임아웃 있음)
-        self.turn_right_pass_dist = 200   # crosswalk_distance가 이 값 미만이면 '횡단보도 지나감'으로 판단
-                                          #   (150→200: 조금 더 일찍 '지나감' 판단 → 우회전을 살짝 일찍 시작)
+        self.turn_right_pass_dist = 150   # crosswalk_distance가 이 값 미만이면 '횡단보도 지나감'으로 판단
         self.turn_right_forward_max = 2.6 # 정규화 전진 최대 시간(초, 타임아웃). 횡단보도 검출 실패해도 여기서 회전
 
         self.last_park_detect = False
@@ -310,10 +261,6 @@ class SelfDrivingNode(Node):
             camera = 'depth_cam'#self.get_parameter('depth_camera_name').value
             self.create_subscription(Image, '/ascamera/camera_publisher/rgb0/image' , self.image_callback, 1)
             self.create_subscription(ObjectsInfo, '/yolov5_ros2/object_detect', self.get_object_callback, 1)
-            # [방법1-1단계] 뎁스(16UC1=mm) 구독. 주차 표지판 픽셀의 실제 거리 읽어 3D 위치 계산(로그 검증용).
-            self.create_subscription(Image, '/ascamera/camera_publisher/depth0/image_raw', self.depth_callback, 1)
-            # [방법1-2단계] 오도메트리 구독 — 뎁스로 계산한 (fwd, right) 만큼 메카넘 이동 시 거리 폐루프용.
-            self.create_subscription(Odometry, '/odom', self.odom_callback, 1)
             self.mecanum_pub.publish(Twist())
             self.enter = True
         response.success = True
@@ -347,51 +294,13 @@ class SelfDrivingNode(Node):
         return response
 
     def button_callback(self, msg):
-        # [스위치 출발/리셋] 온보드 버튼(key1/key2 아무거나) press 이벤트 처리.
-        #   물리 press 1회 = state=1(PRESSED) 1회 발행. 이 이벤트 간 시간차로 단일/더블을 구분한다.
-        #   - 한 번 누름  → double_press_window 후 on_single_press() (스탠바이면 출발)
-        #   - 두 번 누름  → on_double_press() (스탠바이로 리셋)
-        if msg.state not in (1, 5):
-            return
-        now = time.time()
-        if now - self._last_press_time < self.double_press_window:
-            # 더블프레스: 대기 중이던 단일 실행 취소 후 리셋
-            self._last_press_time = 0.0
-            if self._pending_single_timer is not None:
-                self._pending_single_timer.cancel()
-                self._pending_single_timer = None
-            self.on_double_press()
-        else:
-            # 첫 press: 창(window) 뒤에 단일 실행 예약(그 안에 두 번째 오면 위에서 취소됨)
-            self._last_press_time = now
-            if self._pending_single_timer is not None:
-                self._pending_single_timer.cancel()
-            self._pending_single_timer = threading.Timer(self.double_press_window, self.on_single_press)
-            self._pending_single_timer.start()
-
-    def on_single_press(self):
-        # [단일 press] 스탠바이(enter 완료 & 아직 출발 전)면 주행 시작. 주행 중이면 무시.
-        self._pending_single_timer = None
-        if self.enter and not self.start:
-            self.get_logger().info('\033[1;32m%s\033[0m' % 'START (single press) -> 주행 시작')
+        # [스위치 출발] 온보드 버튼이 눌리면 주행 시작.
+        #   state=1(PRESSED 눌림), 5(CLICK 클릭) 둘 다 시작 트리거로 인정. id(key1/key2)는 무시(둘 중 아무 버튼).
+        #   enter(초기화)가 끝난 뒤에만, 아직 출발 전(not start)일 때만 반응 → 주행 중 오작동 방지.
+        if msg.state in (1, 5) and self.enter and not self.start:
+            self.get_logger().info('\033[1;32m%s\033[0m' % ('START button pressed (id=%d) -> 주행 시작' % msg.id))
             with self.lock:
                 self.start = True
-
-    def on_double_press(self):
-        # [더블 press] 언제든 스탠바이로 리셋(주차 후 재테스트 편의). 다시 한 번 누르면 출발.
-        self.get_logger().info('\033[1;33m%s\033[0m' % 'DOUBLE press -> RESET to STANDBY (한 번 더 누르면 출발)')
-        self.reset_to_standby()
-
-    def reset_to_standby(self):
-        # 모든 주행 상태를 초기값으로 되돌려 스탠바이로. 구독/발행자는 유지(재-init 불필요).
-        with self.lock:
-            self.mecanum_pub.publish(Twist())   # 즉시 정지
-            self.param_init()                   # start/parked/going_to_park/crosswalk/turn 등 전부 초기화(start=False)
-            self.enter = True                   # 카메라·YOLO 구독은 살아있으므로 바로 다시 대기 가능
-            self.pid.clear()
-            self.pid_park.clear()
-            self.last_led_state = None          # LED 강제 재발행되도록
-        self.publish_leds((255, 0, 0), (255, 0, 0))  # 스탠바이 = 정지(빨강)
 
     def shutdown(self, signum, frame):  # press 'ctrl+c' to close the program
         self.is_running = False
@@ -404,73 +313,7 @@ class SelfDrivingNode(Node):
             self.image_queue.get()
         # put the image into the queue
         self.image_queue.put(rgb_image)
-
-    def depth_callback(self, ros_image):
-        # [방법1] 최신 뎁스 이미지 저장(16UC1=mm, 480x640). 주차 표지판 픽셀의 거리 샘플링용.
-        try:
-            self.depth_image = self.bridge.imgmsg_to_cv2(ros_image, "16UC1")
-        except Exception as e:
-            self.get_logger().warn('depth cvt fail: %s' % str(e))
-
-    def odom_callback(self, msg):
-        # [방법1] 최신 오도메트리 위치 저장(m). 메카넘 이동 거리 폐루프용.
-        self.odom_x = msg.pose.pose.position.x
-        self.odom_y = msg.pose.pose.position.y
-
-    def sample_depth_mm(self, u, v, win=5):
-        # [방법1] (u,v) 픽셀 주변 win×win 창의 유효(>0) 뎁스 중앙값(mm). 없으면 0.
-        img = self.depth_image
-        if img is None:
-            return 0.0
-        h, w = img.shape[:2]
-        u = int(max(0, min(w - 1, u))); v = int(max(0, min(h - 1, v)))
-        r = win // 2
-        patch = img[max(0, v - r):min(h, v + r + 1), max(0, u - r):min(w, u + r + 1)].reshape(-1)
-        patch = patch[patch > 0]     # 0 = 뎁스 없음(구멍)
-        if patch.size == 0:
-            return 0.0
-        return float(np.median(patch))
-
-    def _drive_until(self, vx, vy, dist):
-        # [방법1] 오도메트리로 dist(m)만큼 이동할 때까지 (vx,vy) 속도 발행. 슬립에 강함(시간 아님).
-        #   vy>0=좌, vy<0=우 (ROS 관례). 안전 타임아웃 포함.
-        if dist <= 0.01:
-            return
-        sx, sy = self.odom_x, self.odom_y
-        tw = Twist(); tw.linear.x = vx; tw.linear.y = vy
-        speed = max(0.01, abs(vx) + abs(vy))
-        timeout = dist / speed + 2.0
-        t0 = time.time()
-        while self.is_running and (time.time() - t0) < timeout:
-            self.mecanum_pub.publish(tw)
-            if math.hypot(self.odom_x - sx, self.odom_y - sy) >= dist:
-                break
-            time.sleep(0.02)
-        self.mecanum_pub.publish(Twist())
-
-    def park_action_depth(self, fwd0, right0):
-        # [방법1] 캡처한 표지판 (fwd0, right0) 미터를 기준으로: ① 전방 (fwd0-standoff) 이동
-        #   ② 우측 (right0+standoff) 횡이동 → 표지판 기준 주차칸으로. 오도메트리 거리 폐루프.
-        fwd_move = max(0.0, fwd0 - self.park_standoff_fwd)
-        strafe_move = right0 + self.park_standoff_right
-        self.get_logger().info('\033[1;41mDEPTH PARK: forward %.2fm then strafe right %.2fm\033[0m' % (fwd_move, strafe_move))
-        if self.machine_type == 'MentorPi_Mecanum':
-            # ① 전진: 오도메트리 거리 폐루프(주축이라 /odom이 확실히 적분함, 슬립에 강함)
-            self._drive_until(self.park_forward_speed, 0.0, fwd_move)
-            time.sleep(0.2)
-            # ② 우측 횡이동: 시간 기반(검증된 방식 — /odom이 측면 이동을 적분 안 할 수 있어 안전하게)
-            tw = Twist(); tw.linear.y = -self.park_lateral_speed
-            self.mecanum_pub.publish(tw)
-            time.sleep(strafe_move / self.park_lateral_speed)
-            self.mecanum_pub.publish(Twist())
-        else:
-            # 메카넘 아닌 모델은 기존 park_action 사용
-            self.park_action()
-            return
-        self.mecanum_pub.publish(Twist())
-        self.parked = True
-        self.get_logger().info('\033[1;41mDEPTH PARK DONE\033[0m')
-
+    
     # parking processing
     def park_action(self):
         if self.machine_type == 'MentorPi_Mecanum':
@@ -483,9 +326,9 @@ class SelfDrivingNode(Node):
             time.sleep(self.park_forward_time)
             # 옆으로 이동(메카넘 횡이동)하여 주차칸에 진입
             twist = Twist()
-            twist.linear.y = -self.park_lateral_speed
+            twist.linear.y = -0.2
             self.mecanum_pub.publish(twist)
-            time.sleep(self.park_lateral_dist / self.park_lateral_speed)
+            time.sleep(0.38/0.2)
         
         # 안 쓰는 모델
         elif self.machine_type == 'MentorPi_Acker':
@@ -686,77 +529,27 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                         self.park_x, self.park_area, self.park_min_area))
-                    # [방법1-1단계 계측] 표지판 픽셀의 뎁스(실거리)와 카메라기준 3D 위치 로그(주행 안 바꿈).
-                    #   depth_mm=표지판까지 거리(mm), fwd=전방거리(m), right=옆거리(m, +면 표지판이 우측).
-                    #   표지판을 알려진 거리(예 0.5m)에 놓고 이 값이 맞는지 = 뎁스-RGB 정렬/intrinsics 검증.
-                    depth_mm = self.sample_depth_mm(self.park_x, self.park_cy)
-                    if depth_mm > 0:
-                        z = depth_mm / 1000.0
-                        fwd = z
-                        right = (self.park_x - self.cam_cx) * z / self.cam_fx
-                        self.park_depth_m = fwd     # [방법1] 트리거/이동 계산용 저장
-                        self.park_right_m = right
-                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=%.0fmm  fwd=%.2fm right=%.2fm\033[0m' % (
-                            self.park_x, self.park_cy, depth_mm, fwd, right))
-                    else:
-                        self.park_depth_m = 0.0
-                        self.get_logger().info('\033[1;46m[DEPTH] park_x=%d cy=%d depth=NONE(구멍/정렬확인)\033[0m' % (
-                            self.park_x, self.park_cy))
+                if self.going_to_park and 0 < self.park_x and self.park_area > self.park_min_area:
+                    # [수정] going_to_park(우회전 이후)일 때만 주차. 출발 지점에서 park 표지판이 보여도
+                    #   주차/접근 모드에 안 들어가게(다른 팀이 신호등을 치워 출발선에서 park가 보이던 문제).
+                    # 표지판에 충분히 가까움 → 감속하며 주차 준비
+                    twist.linear.x = self.slow_down_speed
+                    if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
+                        self.count_park += 1
+                        # [진단 로그] 카운트 진행상황 확인 → 8에 도달하는지 보기
+                        self.get_logger().info('\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m' % (self.count_park, self.park_area))
+                        if self.count_park >= 8:  # 8프레임 이상 가까우면 주차 시작
+                            self.get_logger().info('\033[1;41m=== PARK START ===\033[0m')
+                            self.mecanum_pub.publish(Twist())
+                            self.start_park = True
+                            self.stop = True
+                            self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
+                            threading.Thread(target=self.park_action).start()
                 else:
-                    self.park_depth_m = 0.0     # 표지판 미검출 프레임
-                # [주차 트리거] going_to_park(우회전 이후)에서만 동작.
-                if self.going_to_park and not self.start_park:
-                    if self.depth_park_enabled:
-                        # [방법1] 뎁스 캡처 트리거: 표지판까지 (fwd, right)를 미터로 얻어 유효 검출이
-                        #   park_capture_frames 연속이면 즉시 정지+캡처 후 메카넘+오도메트리로 정위치 이동.
-                        #   area/park_x(옆거리 편차로 불안정) 대신 실제 거리 사용 → 1.68m 앞에서 조기주차하던 문제 해결.
-                        valid = (0 < self.park_x and 0.05 < self.park_depth_m <= self.park_capture_dist)
-                        if valid:
-                            twist.linear.x = self.slow_down_speed
-                            self.count_park += 1
-                            if self.count_park >= self.park_capture_frames:
-                                fwd0 = self.park_depth_m
-                                right0 = self.park_right_m
-                                self.get_logger().info('\033[1;41m=== DEPTH PARK CAPTURE fwd=%.2f right=%.2f -> move fwd=%.2f strafe=%.2f ===\033[0m' % (
-                                    fwd0, right0, max(0.0, fwd0 - self.park_standoff_fwd), right0 + self.park_standoff_right))
-                                self.mecanum_pub.publish(Twist())
-                                self.start_park = True
-                                self.stop = True
-                                self.going_to_park = False
-                                threading.Thread(target=self.park_action_depth, args=(fwd0, right0), daemon=True).start()
-                        else:
-                            if self.count_park > 0:
-                                self.count_park -= 1
-                    else:
-                        # [폴백 - 기존 area/park_x arm-fire] depth_park_enabled=False 일 때만.
-                        if 0 < self.park_x and self.park_area > self.park_min_area:
-                            twist.linear.x = self.slow_down_speed
-                            self.count_park += 1
-                            if self.count_park >= self.park_arm_frames and not self.park_armed:
-                                self.park_armed = True
-                                self.park_arm_x = self.park_x
-                                self.get_logger().info('\033[1;41m=== PARK ARMED (area=%d, park_x=%d) ===\033[0m' % (
-                                    self.park_area, self.park_x))
-                        else:
-                            if self.count_park > 0:
-                                self.count_park -= 1
-                        if self.park_armed:
-                            twist.linear.x = self.slow_down_speed
-                            if self.park_x < 0:
-                                self.park_gone_count += 1
-                            else:
-                                self.park_gone_count = 0
-                                self.park_last_x = self.park_x
-                            advanced = (0 < self.park_x and self.park_x >= self.park_arm_x + self.park_fire_advance)
-                            real_exit = (self.park_gone_count >= self.park_gone_frames and self.park_last_x >= self.park_gone_min_x)
-                            if advanced or real_exit:
-                                self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d arm_x=%d gone=%d) ===\033[0m' % (
-                                    self.park_x, self.park_arm_x, self.park_gone_count))
-                                self.mecanum_pub.publish(Twist())
-                                self.start_park = True
-                                self.stop = True
-                                self.going_to_park = False
-                                threading.Thread(target=self.park_action).start()
+                    # [수정] 검출이 한 프레임 끊겨도 0으로 리셋하지 않고 1씩만 감소 → 드문드문 검출에 강하게.
+                    #   (기존 self.count_park=0 은 한 번만 놓쳐도 처음부터 다시 세서 8을 못 채웠음)
+                    if self.count_park > 0:
+                        self.count_park -= 1
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
@@ -785,9 +578,8 @@ class SelfDrivingNode(Node):
                     _, _, _, right_x = self.lane_detect_right(binary_image, result_image)
                     self.get_logger().info('\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m' % (
                         right_x, self.park_lane_setpoint))
-                    # 주차 표지판이 보이면(park_x>0) 또는 이미 arm됐으면 감속해 정밀 접근(지나침 방지).
-                    #   armed 후 표지판이 잠깐 사라져도(park_x<0) 서행 유지 → 발사 직전 가속 방지.
-                    twist.linear.x = self.slow_down_speed if (self.park_x > 0 or self.park_armed) else self.normal_speed
+                    # 주차 표지판이 보이면(park_x>0) 감속해 정밀 접근(지나침 방지). 아직 안 보이면 복도를 순항속도로.
+                    twist.linear.x = self.slow_down_speed if self.park_x > 0 else self.normal_speed
                     if right_x >= 0:
                         # [②] 전용 PID(pid_park)로 우측라인 추종 — 회전 직후 파고듦을 단단히 복구.
                         #   클램프도 park_angular_limit(0.4)로 넓혀 회복 각속도 확보(직진용 0.25보다 큼).
@@ -881,7 +673,6 @@ class SelfDrivingNode(Node):
         self.objects_info = msg.objects
         # [수정] 주차 표지판은 매 프레임 새로 판단(사라지면 0으로). 멀리서 한 번 본 값이 남아 오작동하던 문제 방지.
         self.park_x = -1
-        self.park_cy = -1
         self.park_area = 0
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
@@ -934,7 +725,6 @@ class SelfDrivingNode(Node):
                     if area > self.park_area:
                         self.park_area = area
                         self.park_x = center[0]
-                        self.park_cy = center[1]   # [방법1] 뎁스 샘플링용 중심 y
                 elif class_name == 'red' or class_name == 'green':  # obtain the status of the traffic light
                     self.traffic_signs_status = i
                     if class_name == 'red':
