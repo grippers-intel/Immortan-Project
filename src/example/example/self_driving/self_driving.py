@@ -428,6 +428,7 @@ class SelfDrivingNode(Node):
         self.parked = True  # 주차 완료 → main 루프가 이후 계속 정지 유지
         # TODO : park LED, shutdown
         led.mode_park_done()
+        self.shutdown()
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
