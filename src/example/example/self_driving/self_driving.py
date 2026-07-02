@@ -206,7 +206,7 @@ class SelfDrivingNode(Node):
         self.count_right = 0
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
-        self.right_min_area = 800  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
+        self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
 
         # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
         self.count_go = 0
@@ -215,6 +215,11 @@ class SelfDrivingNode(Node):
         self.last_led_state = (
             None  # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
         )
+        self.led_update_interval = (
+            0.1  # LED 갱신 빈도 제한(초). 너무 자주 갱신하면 제어 루프 부담이 커짐.
+        )
+        self.last_led_update_time = 0.0  # 마지막 LED 갱신 시각
+        self.current_led_mode = None  # 현재 LED 모드(상태 변화 시에만 실제 GPIO 갱신)
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = (
@@ -225,11 +230,11 @@ class SelfDrivingNode(Node):
             -0.5
         )  # 우회전 각속도(음수=우회전). 절댓값 ↑ = 더 급하게 돔
         self.turn_right_forward_time = (
-            0.2  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
+            0.01  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
         )
         #   (0.8→1.1→0.9: 늦게 진입해 왼쪽 앞바퀴가 라인 밟음 → 조금 일찍 회전)
         self.turn_right_duration = (
-            3.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            3.3  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
         #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
         #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
@@ -268,13 +273,13 @@ class SelfDrivingNode(Node):
         #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
-        self.crosswalk_approach_speed = 0.15  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
+        self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.35  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.normal_speed = 0.3  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
@@ -557,36 +562,33 @@ class SelfDrivingNode(Node):
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
     def update_leds(self):
-        # GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-        # blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
-        # if self.parked:
-        #     # 주차 완료 → 모든 LED 점멸
-        #     c = YELLOW if blink else OFF
-        #     led1 = led2 = c
-        # elif self.stop:
-        #     # 정지 → 빨강
-        #     led1 = led2 = RED
-        # elif self.doing_turn_right or self.turn_right:
-        #     # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-        #     led1 = OFF
-        #     led2 = YELLOW if blink else OFF
-        # elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-        #     # 직진 표지판 인식 → 양쪽 노란 점멸
-        #     led1 = led2 = YELLOW if blink else OFF
-        # else:
-        #     # 주행 → 녹색
-        #     led1 = led2 = GREEN
-        # self.publish_leds(led1, led2)
+        now = time.time()
+        if (
+            now - self.last_led_update_time < self.led_update_interval
+            and self.current_led_mode is not None
+        ):
+            return
+        self.last_led_update_time = now
 
         if self.parked:
-            led.mode_park_done()
-
+            desired_mode = "park_done"
         elif self.stop:
-            led.mode_stop()
-
+            desired_mode = "stop"
         elif self.turn_right or self.doing_turn_right:
-            led.mode_turn_right()
+            desired_mode = "turn_right"
+        else:
+            desired_mode = "straight"
 
+        if self.current_led_mode == desired_mode:
+            return
+
+        self.current_led_mode = desired_mode
+        if desired_mode == "park_done":
+            led.mode_park_done()
+        elif desired_mode == "stop":
+            led.mode_stop()
+        elif desired_mode == "turn_right":
+            led.mode_turn_right()
         else:
             led.mode_straight()
 
@@ -603,7 +605,7 @@ class SelfDrivingNode(Node):
 
             result_image = image.copy()
             if self.start:
-                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(상태 변화/간격 제한)
             else:
                 self.publish_leds(
                     (255, 0, 0), (255, 0, 0)
