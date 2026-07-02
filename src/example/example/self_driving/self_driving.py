@@ -351,6 +351,8 @@ class SelfDrivingNode(Node):
         self.red_close_time = 0  # 가까운 빨강 마지막 검출 시각
         self.red_min_area = 800  # 빨강 박스가 이 면적 이상이면 '가까운 빨강'으로 보고 정지 트리거 (로그 보고 튜닝)
 
+        self.led_update_interval = 0.1
+
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
