@@ -144,7 +144,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.45,  # TODO : 0.30→0.375→0.45 (직진 0.5에서 급감속 없애기)
-                "angular_z": -1.4,  # TODO : -0.55→-1.35→-1.0→-1.2→-1.4 (linear 올리면서 반경 유지)
+                "angular_z": -1.6,  # TODO : -0.55→-1.35→-1.0→-1.2→-1.4→-1.6 (linear 올리면서 반경 유지)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -659,7 +659,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 180  # TODO 도로 중앙값 조절 (245->230->250->230->240->250->270->255: 270은 도달불가 이탈, 실제 달성범위 228~244 기준 5cm 우측)
+                            self.pid.SetPoint = 190  # TODO 도로 중앙값 조절 (245->230->250->230->240->250->270->255->190: 로그분석결과 시작위치 lane_x=164.5가 올바른위치, SetPoint=255가 왼쪽으로 당겨 평형점이 255=너무왼쪽)
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
