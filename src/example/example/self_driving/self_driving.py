@@ -130,11 +130,12 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        self.park_min_area = 350   # arm(주차 준비) 최소 면적. (1200→350: 중앙 주행 시 표지판이 옆으로 멀어져
-                                   #   area가 1120에서 정체→arm 실패로 주차 통과하던 문제. area는 불안정하고 park_x는
-                                   #   안정적이므로 arm은 느슨하게, 발사는 park_x(park_exit_x)로 결정. 오검출 arm되면 ↑)
-        self.park_forward_time = 0.8  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
-                                      #   (1.0→0.8: 주차가 너무 멀리 가서 멈춰 전진거리 축소. 더 멀면 ↓, 덜 가면 ↑)
+        self.park_min_area = 700   # arm(주차 준비) 최소 면적. (1200→350→700: 350은 너무 낮아 멀리 있는 작은
+                                   #   표지판(area 352)에 arm→즉시 발사로 너무 일찍 주차. 700은 '멀리 작게'는 거르고
+                                   #   '충분히 가까움(중앙주행 peak≈1120)'만 arm. 너무 일찍이면 ↑, 아예 arm 안되면 ↓)
+        self.park_forward_time = 1.2  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
+                                      #   (1.0→0.8→1.2: 발사(px≈505)가 일관적인데 거기서 주차하면 주차칸 전에 짧게 멈춤 →
+                                      #    발사 후 전진 늘려 주차칸까지 도달. 여전히 짧으면 ↑, 넘어가면 ↓)
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
         self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
