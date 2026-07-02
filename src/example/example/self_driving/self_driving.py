@@ -130,8 +130,9 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
-                                   #   (실측 로그 기반으로 1200 설정)
+        self.park_min_area = 350   # arm(주차 준비) 최소 면적. (1200→350: 중앙 주행 시 표지판이 옆으로 멀어져
+                                   #   area가 1120에서 정체→arm 실패로 주차 통과하던 문제. area는 불안정하고 park_x는
+                                   #   안정적이므로 arm은 느슨하게, 발사는 park_x(park_exit_x)로 결정. 오검출 arm되면 ↑)
         self.park_forward_time = 0.8  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
                                       #   (1.0→0.8: 주차가 너무 멀리 가서 멈춰 전진거리 축소. 더 멀면 ↓, 덜 가면 ↑)
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
@@ -141,7 +142,7 @@ class SelfDrivingNode(Node):
         # [주차 트리거 - arm/fire] 좁은 FOV라 표지판이 주차 직전 화면 우측으로 빠져나감. 이 '이탈 순간'이
         #   매번 일정한 기하학적 지점이라 트리거로 씀. ① 가까이서 arm → ② 우측 이탈 시 fire.
         self.park_armed = False        # 표지판을 가까이서 충분히 봤다(주차 준비 완료)
-        self.park_arm_frames = 5       # park_area>min 이 이 프레임 수 이상이면 arm. 너무 늦게 arm되면 ↓
+        self.park_arm_frames = 3       # park_area>min 이 이 프레임 수 이상이면 arm. (5→3: 표지판이 우측으로 빠지기 전에 arm 완료)
         self.park_exit_x = 500         # 표지판 중심 x가 이 값(0~640) 넘으면 '우측 이탈'로 보고 fire. 로그의 park_x로 튜닝
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
