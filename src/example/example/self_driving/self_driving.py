@@ -282,6 +282,9 @@ class SelfDrivingNode(Node):
         #   화면 안으로 다시 끌어온다. 여기서만 쓰는 저속/저각속도.
         self.lane_recover_speed = 0.1      # 재획득용 저속 전진(m/s). 너무 빨라 이탈하면 ↓
         self.lane_recover_angular = 0.3    # 좌회전(+)으로 좌측 라인을 화면 안으로. 복구 느리면 ↑, 지나쳐 좌로 튀면 ↓
+        self.lane_lost_count = 0           # 연속으로 라인을 잃은 프레임 수(디바운스용)
+        self.lane_lost_frames = 5          # 이만큼 연속 미검출이면 '진짜 이탈'로 보고 재획득 시작.
+                                           #   코너 중 1~2프레임 순간 누락으로 좌회전하던 오발동 방지. 재출발 지연되면 ↓
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -779,6 +782,12 @@ class SelfDrivingNode(Node):
                 self.get_logger().info('\033[1;35mTURN? start_turn=%s lane_x=%d far=%d thr=%d stop=%s doing=%s go2park=%s start_park=%s\033[0m' % (
                     self.start_turn, lane_x, lane_x_far, self.turn_threshold,
                     self.stop, self.doing_turn_right, self.going_to_park, self.start_park))
+                # [start_turn 전역 타임아웃] 코너 회전 상태는 시작 후 turn_recover_time이 지나면 무조건 해제.
+                #   (예전엔 차선추종 분기 안에서만 해제 → 정지/차선상실 중엔 안 풀려, 재획득 로직이 계속
+                #    '코너 중'으로 오인돼 막혔음.) 이걸로 코너가 끝나야 재획득이 동작한다.
+                if self.start_turn and (time.time() - self.start_turn_time_stamp > self.turn_recover_time):
+                    self.start_turn = False
+
                 if not self.start_park and self.going_to_park and not self.stop:
                     # [수정] '우회전 이후(going_to_park)'에만 우측 라인 접근 모드. (park_x>0 조건 제거 —
                     #   출발선에서 park 표지판이 보이면 오작동하던 문제). '우측 라인'을 PID로 추종.
@@ -805,6 +814,7 @@ class SelfDrivingNode(Node):
                         twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
                     self.mecanum_pub.publish(twist)
                 elif not self.start_park and lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전/주차 동작 중엔 차선추종 양보
+                    self.lane_lost_count = 0  # 라인을 잡았으니 미검출 카운터 리셋
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
                         if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
@@ -845,17 +855,24 @@ class SelfDrivingNode(Node):
                         twist.linear.x, twist.angular.z, self.start_turn, lane_x))
                     self.mecanum_pub.publish(twist)
                 elif (not self.start_park and not self.going_to_park and not self.stop
-                        and not self.doing_turn_right):
+                        and not self.doing_turn_right and not self.start_turn):
                     # [차선 재획득] 여기 도달 = 위 elif의 lane_x>=0 조건이 실패 → lane_x<0(차선 미검출).
-                    #   주행 상태(정지/주차/우회전/주차경로 아님)인데 라인을 잃음(코너 직후 우측을 봐서
-                    #   좌측 라인이 ROI 밖). 예전엔 아래 else로 빠져 아무 명령도 안 나가 로봇이 멈췄고,
-                    #   그래서 횡단보도/신호등 정지 후 초록이어도 재출발을 못 했음.
-                    #   → 저속 전진+좌회전으로 좌측 라인을 화면 안으로 끌어와 재획득한다.
-                    self.pid.clear()
-                    twist.linear.x = self.lane_recover_speed
-                    twist.angular.z = self.lane_recover_angular
-                    self.get_logger().info('\033[1;33mLANE LOST -> recover (creep+left) lane_x=%d\033[0m' % lane_x)
-                    self.mecanum_pub.publish(twist)
+                    #   [가드] not start_turn: 코너 회전 중(또는 회전 직후 복귀 중)엔 절대 재획득하지 않음.
+                    #     코너 돌 때 가까운 ROI에서 라인이 잠깐 -1로 빠지는데, 여기서 좌회전하면 코너를
+                    #     망치고 '멈췄다가 갑자기 왼쪽으로' 감. 코너가 끝나(start_turn 해제) 진짜 이탈일 때만 복구.
+                    #   [디바운스] lane_lost_frames 연속 미검출일 때만 발동 — 1~2프레임 순간 누락 무시.
+                    self.lane_lost_count += 1
+                    if self.lane_lost_count >= self.lane_lost_frames:
+                        # 지속적 미검출 = 재출발 시 우측 응시 등 진짜 이탈 → 저속 전진+좌회전으로 재획득.
+                        self.pid.clear()
+                        twist.linear.x = self.lane_recover_speed
+                        twist.angular.z = self.lane_recover_angular
+                        self.get_logger().info('\033[1;33mLANE LOST -> recover (creep+left) lane_x=%d cnt=%d\033[0m' % (
+                            lane_x, self.lane_lost_count))
+                        self.mecanum_pub.publish(twist)
+                    else:
+                        # 아직 순간 누락 판정 구간 → 아무 것도 발행하지 않아 직전 명령 유지.
+                        self.pid.clear()
                 else:
                     self.pid.clear()
 
