@@ -32,9 +32,9 @@ class LaneDetector(object):
                     278,
                     300,
                     0,
-                    130,
+                    200,
                     0.1,
-                ),  # 박스 5 (기존 3번) - x범위 0~130: box4(0~320)가 코너조건 담당, box5는 PID max_center_x에서 제외
+                ),  # 박스 5 (기존 3번) - x범위 0~200: 차선(x≈160~194) 포함, 횡단보도stripe(x≈229) 제외
             )
         else:
             self.rois = (
