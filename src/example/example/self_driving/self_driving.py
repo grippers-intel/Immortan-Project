@@ -145,8 +145,8 @@ class SelfDrivingNode(Node):
         self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
         self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.5    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
-                                        #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
+        self.park_standoff_fwd = 0.7    # 전진 이동 = fwd - 이 값. (0.1→0.5→0.7: 여전히 주차칸을 지나쳐 주차 →
+                                        #   전진량을 더 줄임. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
         self.park_standoff_right = 0.15 # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         self.odom_x = 0.0
         self.odom_y = 0.0
@@ -259,7 +259,9 @@ class SelfDrivingNode(Node):
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   속도와 같은 비율로 스케일(반경 = speed/|angular|). 0.3→0.45라 -0.9→-1.35.
         #   ※ normal_speed를 바꾸면 이 값도 같은 비율로 바꿔야 함.
-        self.turn_angular_z = -1.35
+        #   [튜닝] 모든 코너에서 약간씩 과회전(안쪽으로 파고듦) → 절댓값을 낮춰 회전 반경을 넓힘.
+        #   -1.35→-1.15. 여전히 과회전이면 더 ↓(-1.05), 이제 못 돌고 바깥으로 나가면 ↑(-1.25).
+        self.turn_angular_z = -1.15
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.25
