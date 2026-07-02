@@ -491,8 +491,8 @@ class SelfDrivingNode(Node):
 
                     if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
                         if (
-                            self.crosswalk_box_height > 15
-                        ):  # 30→60→50→20→15→12→15: 15가 적당한 정지 위치
+                            self.crosswalk_box_height > 13
+                        ):  # 30→60→50→20→15→12→15→13: 15는 횡단보도 넘어서 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -847,10 +847,10 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        10 < box_height < 180
+                        10 < box_height < 250
                         and 150 < box_width
-                        and box_width > 2 * box_height
-                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단, width>2*height: 정사각형 오인식 차단 (실제 횡단보도는 가로>>세로)
+                        and box_width > 1.5 * box_height
+                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단, width>1.5*height: 비율 완화 (가까울수록 세로가 커짐, 180→250 상한도 완화)
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
@@ -863,12 +863,12 @@ class SelfDrivingNode(Node):
                     sign_h = abs(i.box[1] - i.box[3])
                     sign_w = abs(i.box[0] - i.box[2])
                     self.get_logger().info(
-                        f"[right raw] box_height: {sign_h}, box_width: {sign_w}"
+                        f"\033[1;31m[right raw] box_height: {sign_h}, box_width: {sign_w}\033[0m"
                     )
                     self.count_right += 1
                     self.count_right_miss = 0
                     if (
-                        self.count_right >= 5
+                        self.count_right >= 3
                     ):  # If it is detected multiple times, take the right turning sign to true
                         self.turn_right = True
                         self.count_right = 0
@@ -889,7 +889,7 @@ class SelfDrivingNode(Node):
                     sign_h = abs(i.box[1] - i.box[3])
                     sign_w = abs(i.box[0] - i.box[2])
                     self.get_logger().info(
-                        f"[{class_name} raw] box_height: {sign_h}, box_width: {sign_w}"
+                        f"\033[1;31m[{class_name} raw] box_height: {sign_h}, box_width: {sign_w}\033[0m"
                     )
                     self.traffic_signs_status = i
                     found_traffic_light = True
