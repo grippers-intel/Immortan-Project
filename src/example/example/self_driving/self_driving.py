@@ -489,8 +489,8 @@ class SelfDrivingNode(Node):
 
                     if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
                         if (
-                            self.crosswalk_box_height > 20
-                        ):  # 30→60→50→20: 50이면 camera32처럼 접근속도 느릴 때 횡단보도 위에 올라타야 50 도달, 20으로 낮춰 더 멀리서 정지
+                            self.crosswalk_box_height > 15
+                        ):  # 30→60→50→20→15: 임계값 낮춰 감지 즉시(2프레임≈0.2s) 정지, 이동 거리 최소화
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -674,8 +674,8 @@ class SelfDrivingNode(Node):
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
-                                        self.pid.output, -0.13, 0.13
-                                    )  # TODO : 0.18->0.13, 직진 전용 클램프 - 속도 0.4로 올리면서 직진 중 좌우 떨림 발생, 우회전은 별도 코드(angular_z=-0.713 직접 명령)라 이 클램프 영향 없음
+                                        self.pid.output, -0.18, 0.18
+                                    )  # TODO : 0.18->0.13->0.18 복원, 0.13은 왼쪽 드리프트 보정 불가 (클램프에서 막혀 SetPoint 조정도 효과 없음)
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
@@ -689,10 +689,14 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
-                    if self.pre_slow_down and not self.start_turn:
+                    if (
+                        self.pre_slow_down
+                        and not self.start_turn
+                        and self.crosswalk_box_height > 12
+                    ):
                         twist.linear.x = (
                             self.slow_down_speed
-                        )  # 0.05: 횡단보도 접근 감속 (복원)
+                        )  # cw_h>12일 때만 감속: 멀리서 감지해도 가까워질 때까지 전속력 유지, 정지 직전만 감속
                     if self.accel_ramp_active and not self.start_turn:
                         elapsed = time.time() - self.accel_ramp_start_time
                         if elapsed >= 0.15:
