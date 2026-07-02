@@ -143,7 +143,7 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.27,  # TODO : 0.45→0.32→0.27 (좌바퀴 0.4로 맞춤, 좌 0.4/우 0.14)
+                "linear_x": 0.27,  # TODO : ...→0.24→0.27 (좌바퀴 0.4로, 우바퀴 0.14. 회전 후 저속 B와 조합)
                 "angular_z": -1.4,  # TODO : -0.55→...→-1.4 유지
                 "pid_p": 0.4,
                 "pid_d": 0.05,
@@ -273,8 +273,8 @@ class SelfDrivingNode(Node):
         turn_start = time.time()
         crosswalk_hit = False
         while (
-            time.time() - turn_start < 0.72
-        ):  # TODO : 0.85→0.72초 ≈ 58도 (angular_z=-1.4, 회전각 더 축소로 코너 감지거리 확보)
+            time.time() - turn_start < 0.62
+        ):  # TODO : 0.72→0.62초 ≈ 50도 (angular_z=-1.4, 회전 중 전진 더 감소)
             if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
                 crosswalk_hit = True
                 break
@@ -680,6 +680,14 @@ class SelfDrivingNode(Node):
                             twist.linear.x = (elapsed / 0.15) * self.drive_params[
                                 "straight"
                             ]["linear_x"]
+                    # B: 회전 직후 1.5초간 저속(0.2) 접근 → 코너 횡단보도가 코앞(h=50)에 나타나도 코스팅 없이 그 자리 정지.
+                    # start_turn(회전중)/pre_slow_down(횡단보도 감속중)일 땐 각자 로직 유지, 건드리지 않음
+                    if (
+                        not self.start_turn
+                        and not self.pre_slow_down
+                        and 0 < time.time() - self.turn_exit_time < 1.5
+                    ):
+                        twist.linear.x = min(twist.linear.x, 0.2)
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -688,7 +696,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.55
+                        turn_elapsed > 0.48
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
@@ -707,8 +715,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 0.9
-                    ):  # 1.0→0.9초 상한: angular_z=-1.4 기준 1.4×0.9=1.26rad≈72° (각도 더 축소)
+                        turn_elapsed > 0.8
+                    ):  # 0.9→0.8초 상한: angular_z=-1.4 기준 1.4×0.8=1.12rad≈64° (각도 더 축소)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
