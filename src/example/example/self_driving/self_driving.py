@@ -138,6 +138,13 @@ class SelfDrivingNode(Node):
         # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
         self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
         self.park_lateral_dist = 0.32  # 횡이동 거리(m). (0.38→0.32: 오른쪽으로 너무 깊이 들어가 축소. 더 깊으면 ↓, 덜 들어가면 ↑)
+        # [주차 트리거 - arm/fire] 좁은 FOV라 표지판이 주차 직전 화면 우측으로 빠져나감. 이 '이탈 순간'이
+        #   매번 일정한 기하학적 지점이라 트리거로 씀. ① 가까이서 arm → ② 우측 이탈 시 fire.
+        self.park_armed = False        # 표지판을 가까이서 충분히 봤다(주차 준비 완료)
+        self.park_arm_frames = 5       # park_area>min 이 이 프레임 수 이상이면 arm. 너무 늦게 arm되면 ↓
+        self.park_exit_x = 500         # 표지판 중심 x가 이 값(0~640) 넘으면 '우측 이탈'로 보고 fire. 로그의 park_x로 튜닝
+        self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
+        self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
         self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
@@ -578,27 +585,37 @@ class SelfDrivingNode(Node):
                 if 0 < self.park_x:
                     self.get_logger().info('\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m' % (
                         self.park_x, self.park_area, self.park_min_area))
-                if self.going_to_park and 0 < self.park_x and self.park_area > self.park_min_area:
-                    # [수정] going_to_park(우회전 이후)일 때만 주차. 출발 지점에서 park 표지판이 보여도
-                    #   주차/접근 모드에 안 들어가게(다른 팀이 신호등을 치워 출발선에서 park가 보이던 문제).
-                    # 표지판에 충분히 가까움 → 감속하며 주차 준비
-                    twist.linear.x = self.slow_down_speed
-                    if not self.start_park:  # 주차 시작 (표지판이 가까워 면적 임계 통과)
+                # [주차 트리거 - arm/fire] going_to_park(우회전 이후)에서만 동작.
+                #   좁은 FOV라 표지판을 주차 순간까지 계속 볼 수 없음 → '가까이서 한 번 arm → 우측 이탈 시 fire'.
+                #   표지판이 화면 우측 끝으로 사라지는 위치는 매번 거의 동일 → 착지가 일정해짐.
+                if self.going_to_park and not self.start_park:
+                    # ① arm: 표지판이 가까이(면적>min) 보이면 감속 + 카운트, park_arm_frames 넘으면 armed
+                    if 0 < self.park_x and self.park_area > self.park_min_area:
+                        twist.linear.x = self.slow_down_speed
                         self.count_park += 1
-                        # [진단 로그] 카운트 진행상황 확인 → 8에 도달하는지 보기
-                        self.get_logger().info('\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m' % (self.count_park, self.park_area))
-                        if self.count_park >= 8:  # 8프레임 이상 가까우면 주차 시작
-                            self.get_logger().info('\033[1;41m=== PARK START ===\033[0m')
+                        if self.count_park >= self.park_arm_frames and not self.park_armed:
+                            self.park_armed = True
+                            self.get_logger().info('\033[1;41m=== PARK ARMED (area=%d, park_x=%d) ===\033[0m' % (
+                                self.park_area, self.park_x))
+                    else:
+                        if self.count_park > 0:
+                            self.count_park -= 1
+                    # ② fire: armed 이후 표지판이 우측 끝(park_x>exit_x)으로 가거나 연속으로 사라지면 주차 시작
+                    if self.park_armed:
+                        twist.linear.x = self.slow_down_speed   # armed면 계속 서행(발사 직전 감속 유지)
+                        if self.park_x < 0:
+                            self.park_gone_count += 1
+                        else:
+                            self.park_gone_count = 0
+                        right_edge = (0 < self.park_x and self.park_x > self.park_exit_x)
+                        if right_edge or self.park_gone_count >= self.park_gone_frames:
+                            self.get_logger().info('\033[1;41m=== PARK START (fire: park_x=%d gone=%d) ===\033[0m' % (
+                                self.park_x, self.park_gone_count))
                             self.mecanum_pub.publish(Twist())
                             self.start_park = True
                             self.stop = True
                             self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
                             threading.Thread(target=self.park_action).start()
-                else:
-                    # [수정] 검출이 한 프레임 끊겨도 0으로 리셋하지 않고 1씩만 감소 → 드문드문 검출에 강하게.
-                    #   (기존 self.count_park=0 은 한 번만 놓쳐도 처음부터 다시 세서 8을 못 채웠음)
-                    if self.count_park > 0:
-                        self.count_park -= 1
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
@@ -627,8 +644,9 @@ class SelfDrivingNode(Node):
                     _, _, _, right_x = self.lane_detect_right(binary_image, result_image)
                     self.get_logger().info('\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m' % (
                         right_x, self.park_lane_setpoint))
-                    # 주차 표지판이 보이면(park_x>0) 감속해 정밀 접근(지나침 방지). 아직 안 보이면 복도를 순항속도로.
-                    twist.linear.x = self.slow_down_speed if self.park_x > 0 else self.normal_speed
+                    # 주차 표지판이 보이면(park_x>0) 또는 이미 arm됐으면 감속해 정밀 접근(지나침 방지).
+                    #   armed 후 표지판이 잠깐 사라져도(park_x<0) 서행 유지 → 발사 직전 가속 방지.
+                    twist.linear.x = self.slow_down_speed if (self.park_x > 0 or self.park_armed) else self.normal_speed
                     if right_x >= 0:
                         # [②] 전용 PID(pid_park)로 우측라인 추종 — 회전 직후 파고듦을 단단히 복구.
                         #   클램프도 park_angular_limit(0.4)로 넓혀 회복 각속도 확보(직진용 0.25보다 큼).
