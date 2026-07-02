@@ -16,11 +16,12 @@
 #   8. CROSSWALK_WAIT 1.0 → 2.0초 (규칙 6 준수)
 # =============================================================================
 #
-# 코스 정지 지점 (crosswalk_stage 순서):
-#   Stage 0 (S1): 하단 횡단보도 — 신호등 없음 → 2초 정지
-#   Stage 1 (S2): 좌측 횡단보도 — 신호등 없음 → 2초 정지
-#   Stage 2 (S3): 상단 횡단보도 — 신호등 있음 → green 신호 후 출발  ★ PDF 코스맵 기준
-#   Stage 3 (S4): 우측 횡단보도 — 신호등 없음 → 2초 정지 후 우회전
+# 코스 정지 지점 (crosswalk_stage 순서, 확정):
+#   Stage 0 (S1): 신호등 있음 → green 신호 후 출발
+#   Stage 1 (S2): 신호등 없음 → 2초 정지
+#   Stage 2 (S3): 신호등 있음 → green 신호 후 출발
+#   Stage 3 (S4): 신호등 없음 → 2초 정지 후 우회전
+# 신호등 유무는 TRAFFIC_STAGE로 판단, 색상(green)은 실시간 YOLO 감지로 판단 (규칙 8·9).
 #
 # ★ 표시 항목은 실측 후 조정 필요
 # 시운행(버튼 없음): ros2 launch example self_driving.launch.py test_mode:=true
@@ -85,7 +86,10 @@ TURN_ANGLE_DEG = 80.0  # 우회전 목표 각도 (°) — 오도메트리 기반
 TURN_TIMEOUT = 4.0  # 오도메트리 실패 시 안전 타임아웃 (초)  ★
 
 CROSSWALK_WAIT = 2.0  # 신호등 없는 횡단보도 정지 시간 (초) — 규칙 6
-CROSSWALK_EXIT_T = 1.0  # 횡단보도 탈출 맹목 전진 시간 (초)  ★
+CROSSWALK_EXIT_T = 1.0  # 횡단보도 탈출 최소 전진 시간 (초, 무조건 이동)  ★
+CROSSWALK_EXIT_TIMEOUT = (
+    3.0  # 횡단보도 탈출 최대 시간 (초) — 인식 실패 시 무한 전진 방지 안전장치  ★
+)
 ARROW_BLINK_TIME = 1.5  # 황색 LED 점멸 지속 시간 (초)
 TRAFFIC_TIMEOUT = 15.0  # 신호등 최대 대기 시간 (초)
 
@@ -94,13 +98,23 @@ PARK_STOP_Y = 350  # park 표지판 중심 Y 임계값 (px)  ★
 PARK_TIMEOUT = 5.0  # 주차 직진 최대 시간 (초, 안전장치)
 
 # 감지 임계값
-CROSSWALK_NEAR_Y = 320  # crosswalk Y픽셀 임계 ★ (200→320: 더 가까이 와야 반응)
+CROSSWALK_NEAR_Y = (
+    220  # crosswalk Y픽셀 임계 ★ (320→220: 실측 결과 너무 늦게 반응 → 완화)
+)
+CROSSWALK_AREA_MIN = (
+    400  # crosswalk 최소 감지 면적 (px²) — 절대 폭/높이 상한 제거, 면적 기반으로 완화
+)
 CROSSWALK_COUNT = 3  # 오탐 방지: 3프레임 연속 확인
-ARROW_COUNT = 5  # 오탐 방지: 5프레임 연속 확인 ★ (3→5: 원거리 오감지 방지)
+ARROW_COUNT = (
+    3  # 오탐 방지: 3프레임 연속 확인 ★ (5→3: 우회전 표지판이 화면에 짧게만 노출됨)
+)
 PARK_COUNT = 6  # ★ 오감지 방지: 6프레임 연속 확인
 TRAFFIC_AREA_MIN = 200  # 신호등 최소 감지 면적 (px²)
 PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²)
-ARROW_AREA_MIN = 2000  # 화살표 최소 감지 면적 (px²) ★ (200→2000: 근거리만 반응)
+ARROW_AREA_MIN_GO = (
+    2000  # 직진 표지판 최소 감지 면적 (px²) — 도로 중앙 정면이라 크게 보임
+)
+ARROW_AREA_MIN_RIGHT = 500  # 우회전 표지판 최소 감지 면적 (px²) ★ (2000→500: 도로 옆에 위치해 작고 짧게 보임 → 완화)
 
 # 급커브 처리
 SHARP_TURN_X = (
@@ -113,8 +127,9 @@ SHARP_TURN_COUNT = 3  # 급커브 진입 연속 프레임 (2→3: 오탐 방지)
 # 코스 횡단보도 설정
 MAX_CROSSWALK_STAGE = 4  # S1~S4 총 4회
 TRAFFIC_STAGE = {
-    2
-}  # 신호등 있는 횡단보도: S3(stage=2, 상단)  ★ PDF 코스맵 기준 — 실측 후 S1 필요 시 {0, 2}로 복원
+    0,
+    2,
+}  # 신호등 있는 횡단보도: S1(stage=0), S3(stage=2) — 확정된 코스 정보
 
 
 # =============================================================================
@@ -162,6 +177,7 @@ class SelfDrivingNode(Node):
         self._traffic_color = None
         self._park_triggered = False
         self._park_side_start = None  # 주차 2단계 시작 시각 (독립 타이머)
+        self._cw_exit_start = None  # 횡단보도 탈출 이동 시작 시각 (독립 타이머)
 
         # ── 급커브 상태 ───────────────────────────────────────────────────────
         self._cnt_turn = 0
@@ -440,7 +456,7 @@ class SelfDrivingNode(Node):
                     f"\033[1;33m[CW] Stage {self.crosswalk_stage} 횡단보도 감지\033[0m"
                 )
 
-                # ✅ 수정 2: stage==2(S3)만 신호등 대기, 나머지는 단순 정지
+                # 신호등 유무는 확정된 stage 정보로 판단 (S1·S3), 색상은 실시간 감지로 대기 (규칙 8·9)
                 if self.crosswalk_stage in TRAFFIC_STAGE:
                     self._traffic_color = detected["traffic"]
                     self._transition(State.TRAFFIC_LIGHT)
@@ -470,16 +486,45 @@ class SelfDrivingNode(Node):
         return result_image
 
     # =========================================================================
+    # 공통: 횡단보도 탈출 (물리적 클리어 확인 — 동일 횡단보도 재트리거 방지)
+    # =========================================================================
+    def _do_crosswalk_exit(self) -> bool:
+        """
+        CROSSWALK_EXIT_T초는 무조건 전진하고, 이후로는 crosswalk_y가
+        CROSSWALK_NEAR_Y 아래로 내려갈 때까지(=동일 횡단보도를 실제로 벗어날
+        때까지) 연장 전진한다. CROSSWALK_EXIT_TIMEOUT 초과 시 강제 종료
+        (인식 실패로 인한 무한 전진 방지).
+
+        시간만으로 탈출을 판단하면 실제 폭을 못 벗어난 채 LINE_FOLLOW로
+        복귀해 같은 횡단보도를 재감지 → crosswalk_stage가 잘못 증가해
+        이후 진짜 횡단보도(S2~S4)를 건너뛰는 문제가 있었음.
+
+        반환값 True: 완전히 탈출 → 상태 전환 가능
+        """
+        if self._cw_exit_start is None:
+            self._cw_exit_start = time.time()
+        exit_elapsed = time.time() - self._cw_exit_start
+
+        cw_y = self._scan_objects()["crosswalk_y"]
+        still_near = cw_y > CROSSWALK_NEAR_Y
+
+        if exit_elapsed < CROSSWALK_EXIT_T or (
+            still_near and exit_elapsed < CROSSWALK_EXIT_TIMEOUT
+        ):
+            self._move(linear_x=SLOW_SPEED)
+            return False
+
+        self._cw_exit_start = None
+        return True
+
+    # =========================================================================
     # 상태: CROSSWALK_STOP — 신호등 없는 횡단보도 (S2, S4)
     # =========================================================================
     def _state_crosswalk_stop(self, _image, result_image):
-        """2초 정지 → 1초 맹목 전진(횡단보도 탈출) → LINE_FOLLOW"""
-        elapsed = self._elapsed()
-        if elapsed < CROSSWALK_WAIT:
+        """2초 정지 → 횡단보도 완전 탈출 확인 → LINE_FOLLOW"""
+        if self._elapsed() < CROSSWALK_WAIT:
             self._stop()
-        elif elapsed < CROSSWALK_WAIT + CROSSWALK_EXIT_T:
-            self._move(linear_x=SLOW_SPEED)
-        else:
+        elif self._do_crosswalk_exit():
             self.crosswalk_stage += 1
             self._crosswalk_done = True
             self.get_logger().info(
@@ -494,26 +539,27 @@ class SelfDrivingNode(Node):
     # =========================================================================
     def _state_traffic_light(self, _image, result_image):
         """
-        정지 유지 → green 신호 감지 시 출발.
-        TRAFFIC_TIMEOUT 초과 시 강제 출발.
+        정지 유지 → green 신호 감지 시 횡단보도 완전 탈출 확인 후 출발.
+        TRAFFIC_TIMEOUT 초과 시 강제 탈출.
         """
-        self._stop()
         detected = self._scan_objects()
         if detected["traffic"]:
             self._traffic_color = detected["traffic"]
 
-        if self._traffic_color == "green":
+        timed_out = self._elapsed() > TRAFFIC_TIMEOUT
+        if self._traffic_color != "green" and not timed_out:
+            self._stop()
+            return result_image
+
+        if timed_out and self._traffic_color != "green" and self._cw_exit_start is None:
+            self.get_logger().warn("[TRAFFIC] 타임아웃 → 강제 출발")
+
+        if self._do_crosswalk_exit():
             self.crosswalk_stage += 1
             self._crosswalk_done = True
             self.get_logger().info(
-                f"[TRAFFIC] 녹색 신호 → Stage {self.crosswalk_stage}"
+                f"[TRAFFIC] 신호 확인 → Stage {self.crosswalk_stage}"
             )
-            self._transition(State.LINE_FOLLOW)
-            self._schedule_crosswalk_reset()
-        elif self._elapsed() > TRAFFIC_TIMEOUT:
-            self.get_logger().warn("[TRAFFIC] 타임아웃 → 강제 출발")
-            self.crosswalk_stage += 1
-            self._crosswalk_done = True
             self._transition(State.LINE_FOLLOW)
             self._schedule_crosswalk_reset()
 
@@ -700,16 +746,19 @@ class SelfDrivingNode(Node):
                 result["park_cy"] = max(result["park_cy"], cy)
 
             elif name == "crosswalk":
-                bh = abs(obj.box[3] - obj.box[1])
                 bw = abs(obj.box[2] - obj.box[0])
-                # 실제 횡단보도는 가로>>세로: 너비>150, 너비>2×높이 (정사각형 오인식 차단)
-                if 10 < bh < 180 and bw > 150 and bw > 2 * bh:
+                bh = abs(obj.box[3] - obj.box[1])
+                # 가로가 더 넓은 형태만 (정사각형 오인식 차단) — 절대 폭/높이 상한 제거
+                if area > CROSSWALK_AREA_MIN and bw > bh:
                     result["crosswalk_y"] = max(result["crosswalk_y"], cy)
 
             elif name in ("red", "green") and area > TRAFFIC_AREA_MIN:
                 result["traffic"] = name
 
-            elif name in ("go", "right") and area > ARROW_AREA_MIN:
+            elif name == "go" and area > ARROW_AREA_MIN_GO:
+                result["arrow"] = name
+
+            elif name == "right" and area > ARROW_AREA_MIN_RIGHT:
                 result["arrow"] = name
 
         return result
