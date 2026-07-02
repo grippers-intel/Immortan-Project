@@ -294,9 +294,13 @@ class SelfDrivingNode(Node):
         #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
         # [1차 실차 테스트] 트랙의 작은 균열이 종종 area/aspect 필터를 통과해 횡단보도로
         # 오검출됨(균열도 길쭉한 형태라 aspect 필터만으론 못 거름). YOLO 신뢰도(score)를
-        # 추가로 요구해 저신뢰 오검출을 걸러냄. 실제 횡단보도는 특징이 뚜렷해 score가 높음.
-        # 진짜 횡단보도까지 걸러지면 ↓, 균열이 계속 잡히면 ↑
-        self.crosswalk_min_score = 0.5
+        # 추가로 요구해 저신뢰 오검출을 걸러냄.
+        # [2차 실차 테스트] 0.5로는 진짜 횡단보도까지 통째로 걸러져 아예 동작을 안 했음 ->
+        # 이 모델의 crosswalk 클래스 자체가 score가 낮게 나오는 것으로 보임. 일단 아주
+        # 낮은 노이즈만 거르는 수준(0.25)으로 낮춰두고, get_object_callback의 진단 로그
+        # (실제 score 값)를 보고 "균열은 이 값 미만/진짜는 이 값 이상"인 지점을 찾아
+        # 다시 올릴 것.
+        self.crosswalk_min_score = 0.25
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
@@ -949,11 +953,21 @@ class SelfDrivingNode(Node):
                 if class_name == "crosswalk":
                     # [면적/종횡비/신뢰도 필터] 규정6: 바닥 얼룩·균열 등 오검출 제거, 실제
                     # 횡단보도(가로로 긴 줄무늬, 높은 신뢰도)만 거리 판단에 반영
-                    if (
+                    passed = (
                         area >= self.crosswalk_min_area
                         and aspect >= self.crosswalk_min_aspect
                         and cls_conf >= self.crosswalk_min_score
-                    ):
+                    )
+                    # [진단용] 2차 실차 테스트에서 score 필터가 진짜 횡단보도까지 걸러버린
+                    # 것으로 보여 임계값을 데이터 없이 추측할 수밖에 없었음. 매 검출마다
+                    # 실제 area/aspect/score와 필터 통과 여부를 로그로 남겨, 다음 로그에서
+                    # "균열 vs 진짜"의 실제 수치 경계를 보고 정확히 튜닝할 수 있게 함.
+                    self.get_logger().info(
+                        "\033[1;35m%s\033[0m"
+                        % f"crosswalk candidate: area={area:.0f} aspect={aspect:.2f} "
+                        f"score={cls_conf:.2f} passed={passed}"
+                    )
+                    if passed:
                         found_crosswalk = True
                         if (
                             center[1] > min_distance
