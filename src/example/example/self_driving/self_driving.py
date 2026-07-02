@@ -143,8 +143,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.54,  # TODO : ...→0.4→0.54 (우바퀴 0.4 목표, 좌 0.68/우 0.4)
-                "angular_z": -1.5,  # TODO : ...→-1.9→-1.5 (좌 0.49/우 0.21, 우바퀴 더 올리고 회전각 축소)
+                "linear_x": 0.27,  # TODO : 0.45→0.32→0.27 (좌바퀴 0.4로 맞춤, 좌 0.4/우 0.14)
+                "angular_z": -1.4,  # TODO : -0.55→...→-1.4 유지
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -273,8 +273,8 @@ class SelfDrivingNode(Node):
         turn_start = time.time()
         crosswalk_hit = False
         while (
-            time.time() - turn_start < 0.7
-        ):  # TODO : angular_z=-1.5 기준 1.5×0.7=1.05rad≈60° (각도 더 축소)
+            time.time() - turn_start < 0.85
+        ):  # TODO : 1.0→0.85초 ≈ 68도 (angular_z=-1.4, 회전각 축소로 횡단보도 감지거리 확보)
             if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
                 crosswalk_hit = True
                 break
@@ -445,8 +445,8 @@ class SelfDrivingNode(Node):
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if (
-                        time.time() - self.crosswalk_ignore_time > 1.7
-                    ):  # TODO : ...→1.2→1.5→2.0→1.7 - 정지 후 같은 횡단보도 재정지 방지 (1.7s≈85cm@0.5m/s)
+                        time.time() - self.crosswalk_ignore_time > 2.0
+                    ):  # TODO : ...→1.5→2.0→1.7→2.0 - 정지 후 같은 횡단보도 재정지 방지 (2.0s≈100cm@0.5m/s)
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
@@ -634,7 +634,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 200  # TODO 도로 중앙값 조절 (...->185->205->200) 205는 너무 왼쪽이라 살짝 낮춤 (증가=왼쪽 확인됨)
+                            self.pid.SetPoint = 180  # TODO 도로 중앙값 조절 (...->170->200->180) 170원래값+10, 살짝만 왼쪽 (증가=왼쪽 확인됨)
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
@@ -688,7 +688,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.38
+                        turn_elapsed > 0.65
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
@@ -707,8 +707,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 0.7
-                    ):  # angular_z=-1.5 기준 1.5×0.7=1.05rad≈60° 상한 (각도 더 축소)
+                        turn_elapsed > 1.0
+                    ):  # 1.1→1.0초 상한: angular_z=-1.4 기준 1.4×1.0=1.4rad≈80° (각도 축소)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
