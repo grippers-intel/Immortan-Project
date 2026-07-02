@@ -190,6 +190,10 @@ class SelfDrivingNode(Node):
         self.count_park = 0
         self.stop = False  # stopping sign
         self.start_park = False  # start parking sign
+        self.park_done = False  # 파킹 모션 완료 → 전체 LED 점멸용
+        self.run_mode = (
+            "normal"  # 구동 모드: "normal"(일반구동) / "parking"(우회전 후 파킹)
+        )
 
         self.count_crosswalk = 0
         self.crosswalk_total_count = (
@@ -205,6 +209,9 @@ class SelfDrivingNode(Node):
         self.crosswalk_distance = 0  # distance to the zebra crossing
         self.crosswalk_box_height = (
             0  # YOLO box_height of closest crosswalk (proximity proxy)
+        )
+        self.crosswalk_center_x = (
+            0  # 횡단보도 가로중앙(x) - 파킹모드 차선없을 때 조향 기준
         )
         self.crosswalk_last_seen_time = 0  # TODO : 깜빡임 방지용 마지막 감지 시간
         self.crosswalk_raw_last_seen_time = (
@@ -288,6 +295,9 @@ class SelfDrivingNode(Node):
         self.mecanum_pub.publish(Twist())  # 정지
         self.stop = False  # 주행 로직 재개
         self.turn_right = False  # 표지판 플래그 리셋
+        self.have_turn_right = False  # 우회전 완료 → 우회전 결정 리셋
+        self.count_right = 0  # 우회전 완료 → 표지판 카운트 리셋(다음 우회전용)
+        self.run_mode = "parking"  # 우회전 완료 → 파킹 모드로 전환(일반구동 종료)
         self.accel_ramp_active = True  # 우회전 후 재출발 가속 구간
         self.accel_ramp_start_time = time.time()
 
@@ -361,48 +371,28 @@ class SelfDrivingNode(Node):
         # put the image into the queue
         self.image_queue.put(rgb_image)
 
-    # parking processing
+    # parking processing (파킹 모드 전용)
     def park_action(self):
-        if self.machine_type == "MentorPi_Mecanum":
-            twist = Twist()
-            twist.linear.y = -0.2
-            self.mecanum_pub.publish(twist)
-            time.sleep(0.38 / 0.2)
-        elif self.machine_type == "MentorPi_Acker":
-            twist = Twist()
-            twist.linear.x = 0.15
-            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(3)
-
-            twist = Twist()
-            twist.linear.x = 0.15
-            twist.angular.z = -twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(2)
-
-            twist = Twist()
-            twist.linear.x = -0.15
-            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
-
-        else:
-            twist = Twist()
-            twist.angular.z = -1
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
-            self.mecanum_pub.publish(Twist())
-            twist = Twist()
-            twist.linear.x = 0.2
-            self.mecanum_pub.publish(twist)
-            time.sleep(0.65 / 0.2)
-            self.mecanum_pub.publish(Twist())
-            twist = Twist()
-            twist.angular.z = 1
-            self.mecanum_pub.publish(twist)
-            time.sleep(1.5)
-        self.mecanum_pub.publish(Twist())
+        # 메카넘으로 오른쪽 이동 → 파킹 표지판 세로중심선(park_x)이 화면 왼쪽 20~30% 진입 시 정지
+        park_img_w = 640  # park_x와 동일 스케일(YOLO 이미지 폭)
+        target_x = (
+            0.3 * park_img_w
+        )  # 왼쪽 30% 지점(=192). 오른쪽 이동 중 여기 도달하면 20~30% 구간 진입
+        twist = Twist()
+        twist.linear.y = -0.2  # 오른쪽 이동 (메카넘). 방향 반대면 +0.2
+        self.mecanum_pub.publish(twist)
+        t0 = time.time()
+        while rclpy.ok():
+            # 오른쪽으로 가면 정면 파킹표지판이 화면 왼쪽으로 이동 → park_x 감소, 30%(192) 도달 시 정지
+            if 0 < self.park_x <= target_x:
+                break
+            if time.time() - t0 > 6.0:  # 안전 타임아웃
+                self.get_logger().info("파킹 타임아웃 - 정지")
+                break
+            time.sleep(0.03)
+        self.mecanum_pub.publish(Twist())  # 정지
+        self.park_done = True  # 파킹 완료 → LED 점멸
+        self.get_logger().info("\033[1;35m파킹 완료\033[0m")
 
     def main(self):
         while self.is_running:
@@ -493,6 +483,7 @@ class SelfDrivingNode(Node):
                     and not self.start_slow_down
                     and not self.crosswalk_ignore
                     and not self.start_turn  # 우회전 중 횡단보도 감지로 인한 회전 중단 방지
+                    and not self.start_park  # 파킹 진행 중엔 크로스워크 정지 로직 개입 방지
                 ):
                     # 홀짝 제거: 모든 횡단보도에서 정지. 재정지는 정지 후 시간 기반 무시(1.2초)로 방지
                     if not self.pre_slow_down:
@@ -529,64 +520,46 @@ class SelfDrivingNode(Node):
                         self.count_turn = 0  # TODO 00 : 우회전 카운트 리셋
                         self.start_turn = False  # TODO 00 : 우회전 플래그 리셋
 
-                    if self.traffic_signs_status is not None:
-                        area = abs(
-                            self.traffic_signs_status.box[0]
-                            - self.traffic_signs_status.box[2]
-                        ) * abs(
-                            self.traffic_signs_status.box[1]
-                            - self.traffic_signs_status.box[3]
+                    ts = self.traffic_signs_status
+                    is_red_stop = False
+                    is_green = False
+                    if ts is not None:
+                        light_area = abs(ts.box[0] - ts.box[2]) * abs(
+                            ts.box[1] - ts.box[3]
                         )
-                        if (
-                            self.traffic_signs_status.class_name == "red"
-                            and area < 1000
-                        ):
-                            pass  # 빨간불이면 계속 대기
-                        elif self.traffic_signs_status.class_name == "green":
-                            self.stop = False
-                            self.start_slow_down = False
-                            self.crosswalk_distance = 0  # TODO 00 : 거리 초기화 → 추가
-                            self.crosswalk_ignore = True  # TODO 00 : 무시 시작 → 추가
-                            self.crosswalk_ignore_time = (
-                                time.time()
-                            )  # TODO 00 : 무시 시작 시간 → 추가
-                            self.pre_slow_down = False
-                            self.just_stopped_crosswalk = (
-                                True  # 구버전: 다음 횡단보도 강제 무시
-                            )
-                            self.accel_ramp_active = True  # 초록불 재출발 가속 구간
-                            self.accel_ramp_start_time = time.time()
+                        if ts.class_name == "red" and light_area > 100:
+                            is_red_stop = True  # 빨간불(area>100) → 대기
+                        elif ts.class_name == "green":
+                            is_green = True
 
-                    else:
-                        if (
-                            time.time() - self.stop_time > 0.7
-                        ):  # TODO 00 숫자 변경 = 정지 시간 변경(x.0) 1.0→0.7
-                            if self.turn_right:  # TODO 02 : 우회전 표지판 확인
-                                self.start_slow_down = False
-                                threading.Thread(
-                                    target=self.turn_right_action
-                                ).start()  # TODO 02 : 우회전 표지판 확인
-
-                            else:
-                                self.stop = False
-                                self.start_slow_down = False
-                                self.crosswalk_distance = (
-                                    0  # TODO 00 : 거리 초기화 → 추가
-                                )
-                                self.crosswalk_ignore = (
-                                    True  # TODO 00 : 무시 시작 → 추가
-                                )
-                                self.crosswalk_ignore_time = (
-                                    time.time()
-                                )  # TODO 00 : 무시 시작 시간 → 추가
-                                self.pre_slow_down = False
-                                self.just_stopped_crosswalk = (
-                                    True  # 구버전: 다음 횡단보도 강제 무시
-                                )
-                                self.accel_ramp_active = (
-                                    True  # 횡단보도 재출발 가속 구간
-                                )
-                                self.accel_ramp_start_time = time.time()
+                    if is_red_stop:
+                        pass  # 빨간불(area>100) → 계속 대기 (green 오거나 red 꺼질 때까지)
+                    elif self.have_turn_right and time.time() - self.stop_time > 0.7:
+                        # 우회전 표지판 5회 이상 누적 + 횡단보도 정지 0.7초 후 → 우회전
+                        self.start_slow_down = False
+                        threading.Thread(target=self.turn_right_action).start()
+                    elif is_green and time.time() - self.stop_time > 0.5:
+                        # 초록불 → 재출발 (최소 0.5초 정지 보장)
+                        self.stop = False
+                        self.start_slow_down = False
+                        self.crosswalk_distance = 0
+                        self.crosswalk_ignore = True
+                        self.crosswalk_ignore_time = time.time()
+                        self.pre_slow_down = False
+                        self.just_stopped_crosswalk = True
+                        self.accel_ramp_active = True  # 초록불 재출발 가속 구간
+                        self.accel_ramp_start_time = time.time()
+                    elif not is_green and time.time() - self.stop_time > 0.7:
+                        # 신호 없음(or 작은 red) → 0.7초 후 재출발
+                        self.stop = False
+                        self.start_slow_down = False
+                        self.crosswalk_distance = 0
+                        self.crosswalk_ignore = True
+                        self.crosswalk_ignore_time = time.time()
+                        self.pre_slow_down = False
+                        self.just_stopped_crosswalk = True
+                        self.accel_ramp_active = True  # 횡단보도 재출발 가속 구간
+                        self.accel_ramp_start_time = time.time()
 
                     if not self.stop:
                         self.set_drive_mode("slow_down")
@@ -596,20 +569,18 @@ class SelfDrivingNode(Node):
                     self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
                     # 속도는 차선 감지 후 아래에서 설정
 
-                # If the robot detects a stop sign and a crosswalk, it will slow down to ensure stable recognition
-                if 0 < self.park_x and 135 < self.crosswalk_distance:
-                    twist.linear.x = self.slow_down_speed
-                    if (
-                        not self.start_park and 180 < self.crosswalk_distance
-                    ):  # When the robot is close enough to the crosswalk, it will start parking
-                        self.count_park += 1
-                        if self.count_park >= 15:
-                            self.mecanum_pub.publish(Twist())
-                            self.start_park = True
-                            self.stop = True
-                            threading.Thread(target=self.park_action).start()
-                    else:
-                        self.count_park = 0
+                # 파킹 모드 전용: 횡단보도 높이(box_height)가 6~12일 때 정지 후 파킹 маневр 시작
+                if (
+                    self.run_mode == "parking"
+                    and not self.start_park
+                    and 6 <= self.crosswalk_box_height <= 12
+                ):
+                    self.mecanum_pub.publish(Twist())  # 전진 정지
+                    self.start_park = True
+                    self.stop = True
+                    threading.Thread(
+                        target=self.park_action
+                    ).start()  # 오른쪽 이동 파킹
 
                 # line following processing
                 result_image, lane_angle, lane_x, center_x = self.lane_detect(
@@ -635,7 +606,7 @@ class SelfDrivingNode(Node):
                     f"[DEBUG] stop:{self.stop}, start_turn:{self.start_turn}, count_turn:{self.count_turn}, start_slow_down:{self.start_slow_down}"
                 )  # TODO : 우회전 안되는 원인 추적용 → 추가
                 if not self.start_delay and (
-                    not self.stop or (self.start_slow_down and self.turn_right)
+                    not self.stop or (self.start_slow_down and self.have_turn_right)
                 ):  # TODO : 크리핑(stop=False) 또는 횡단보도정지+우회전표지판 조합일 때만 count_turn 허용 - turn_right_action 실행 중(start_slow_down=False)엔 차단
                     if (
                         len(center_x) >= 5
@@ -699,6 +670,17 @@ class SelfDrivingNode(Node):
                                         )
                                         / 0.145
                                     )
+                            elif (
+                                self.run_mode == "parking"
+                                and self.crosswalk_distance > 0
+                                and self.machine_type != "MentorPi_Acker"
+                            ):
+                                # 파킹모드 + 차선 없음 + 횡단보도 보임 → 횡단보도 가로중앙을 이미지 중앙에 맞추게 조향
+                                err = self.crosswalk_center_x - (w / 2)
+                                twist.angular.z = common.set_range(
+                                    -0.001 * err, -0.15, 0.15
+                                )  # err>0(횡단보도 오른쪽)=로봇 왼쪽 → 우조향(-)
+                                self.pid.clear()
                             else:
                                 self.pid.clear()
                         else:
@@ -728,6 +710,14 @@ class SelfDrivingNode(Node):
                         and 0 < time.time() - self.turn_exit_time < 1.5
                     ):
                         twist.linear.x = min(twist.linear.x, 0.2)
+                    # 파킹모드: 정지/파킹중 아니고 전진속도 미설정이면 저속 전진 (횡단보도 찾을 때까지 직진)
+                    if (
+                        self.run_mode == "parking"
+                        and not self.stop
+                        and not self.start_park
+                        and twist.linear.x <= 0
+                    ):
+                        twist.linear.x = 0.2
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -780,7 +770,7 @@ class SelfDrivingNode(Node):
 
                 # RGB 등화 제어 (LED1: 정지등/주행등, LED2: 방향지시등)
                 led1 = (255, 0, 0) if (self.stop or self.pre_slow_down) else (0, 255, 0)
-                if self.turn_right or self.start_turn:
+                if self.have_turn_right or self.start_turn:
                     blink_on = (time.time() % 0.5) < 0.25
                     led2 = (255, 200, 0) if blink_on else (0, 0, 0)
                 else:
@@ -796,13 +786,29 @@ class SelfDrivingNode(Node):
                 is_stop = self.stop or self.pre_slow_down
                 GPIO.output(PIN_GREEN, LED_OFF if is_stop else LED_ON)
                 GPIO.output(PIN_RED, LED_ON if is_stop else LED_OFF)
-                if self.turn_right or self.start_turn:
+                if self.have_turn_right or self.start_turn:
                     gpio_blink = (time.time() % 0.6) < 0.3
                     GPIO.output(PIN_YELLOW_LEFT, LED_ON if gpio_blink else LED_OFF)
                     GPIO.output(PIN_YELLOW_RIGHT, LED_ON if gpio_blink else LED_OFF)
                 else:
                     GPIO.output(PIN_YELLOW_LEFT, LED_OFF)
                     GPIO.output(PIN_YELLOW_RIGHT, LED_OFF)
+
+                # 파킹 완료 → 모든 RGB/전구 동시 점멸 (기존 LED 덮어씀)
+                if self.park_done:
+                    pk_blink = (time.time() % 0.6) < 0.3
+                    pk = 255 if pk_blink else 0
+                    msg = RGBStates()
+                    msg.states = [
+                        RGBState(index=1, red=pk, green=pk, blue=pk),
+                        RGBState(index=2, red=pk, green=pk, blue=pk),
+                    ]
+                    self.rgb_pub.publish(msg)
+                    g = LED_ON if pk_blink else LED_OFF
+                    GPIO.output(PIN_GREEN, g)
+                    GPIO.output(PIN_RED, g)
+                    GPIO.output(PIN_YELLOW_LEFT, g)
+                    GPIO.output(PIN_YELLOW_RIGHT, g)
 
             else:
                 blink_on = (time.time() % 0.6) < 0.3  # 대기 중 교대 점멸 (50% 듀티)
@@ -844,6 +850,7 @@ class SelfDrivingNode(Node):
         else:
             min_distance = 0
             min_box_height = 0
+            min_center_x = 0  # 가장 가까운 횡단보도의 가로중앙(x) - 파킹모드 조향용
             found_traffic_light = False
             for i in self.objects_info:
                 class_name = i.class_name
@@ -871,6 +878,7 @@ class SelfDrivingNode(Node):
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                             min_distance = center[1]
                             min_box_height = box_height
+                            min_center_x = center[0]  # 가로중앙(x) 저장 - 파킹 조향용
                             self.get_logger().info(
                                 f"crosswalk box_height: {box_height}, box_width: {box_width}"
                             )  # TODO 00 : 높이/너비 로그 → 추가
@@ -880,13 +888,12 @@ class SelfDrivingNode(Node):
                     self.get_logger().info(
                         f"[right raw] box_height: {sign_h}, box_width: {sign_w}"
                     )
-                    self.count_right += 1
+                    self.count_right += 1  # 주행/정지 무관 보일 때마다 누적
                     self.count_right_miss = 0
                     if (
                         self.count_right >= 5
-                    ):  # If it is detected multiple times, take the right turning sign to true
-                        self.turn_right = True
-                        self.count_right = 0
+                    ):  # 목표 카운트(5) 이상 쌓이면 우회전 준비 (실행은 횡단보도 정지 후)
+                        self.have_turn_right = True
                 elif class_name == "park":
                     sign_h = abs(i.box[1] - i.box[3])
                     sign_w = abs(i.box[0] - i.box[2])
@@ -926,6 +933,7 @@ class SelfDrivingNode(Node):
             ):  # TODO : 횡단보도 발견 시 시간 기록, 못 찾으면 0.3초간 이전값 유지
                 self.crosswalk_distance = min_distance
                 self.crosswalk_box_height = min_box_height
+                self.crosswalk_center_x = min_center_x  # 파킹모드 조향용 가로중앙
                 self.crosswalk_last_seen_time = time.time()
             elif time.time() - self.crosswalk_last_seen_time > 0.3:
                 self.crosswalk_distance = 0
