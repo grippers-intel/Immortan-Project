@@ -273,8 +273,8 @@ class SelfDrivingNode(Node):
         turn_start = time.time()
         crosswalk_hit = False
         while (
-            time.time() - turn_start < 0.85
-        ):  # TODO : 1.0→0.85초 ≈ 68도 (angular_z=-1.4, 회전각 축소로 횡단보도 감지거리 확보)
+            time.time() - turn_start < 0.72
+        ):  # TODO : 0.85→0.72초 ≈ 58도 (angular_z=-1.4, 회전각 더 축소로 코너 감지거리 확보)
             if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
                 crosswalk_hit = True
                 break
@@ -464,8 +464,8 @@ class SelfDrivingNode(Node):
 
                     if self.pre_slow_down:
                         if (
-                            self.crosswalk_box_height > 15
-                        ):  # 크기(높이)>15가 2프레임 연속이면 정지
+                            self.crosswalk_box_height > 12
+                        ):  # 15→12: 더 일찍(멀리) 정지 명령 → 코스팅 후에도 앞에서 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -667,7 +667,7 @@ class SelfDrivingNode(Node):
                     if (
                         self.pre_slow_down
                         and not self.start_turn
-                        and self.crosswalk_box_height > 13
+                        and self.crosswalk_box_height > 9
                     ):
                         twist.linear.x = (
                             self.slow_down_speed
@@ -688,7 +688,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.65
+                        turn_elapsed > 0.55
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
@@ -707,8 +707,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 1.0
-                    ):  # 1.1→1.0초 상한: angular_z=-1.4 기준 1.4×1.0=1.4rad≈80° (각도 축소)
+                        turn_elapsed > 0.9
+                    ):  # 1.0→0.9초 상한: angular_z=-1.4 기준 1.4×0.9=1.26rad≈72° (각도 더 축소)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
