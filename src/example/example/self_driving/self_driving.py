@@ -600,50 +600,43 @@ class SelfDrivingNode(Node):
         ]
         self.rgb_pub.publish(msg)
 
-    # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
-    #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
+    # [LED] 규격: 움직임=초록(양쪽) / 정지=빨강 / 주차완료=전체 점멸(예외).
+    #   우회전 동작(코너 start_turn / 우회전표지판 doing_turn_right) 중엔 왼쪽 초록·오른쪽만 노랑 점멸.
+    #   '정지' 판정 = self.stop 이면서 주차 동작 중(start_park)이 아닐 때. (주차 이동 중은 '움직임'=초록)
     def update_leds(self):
         GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
         blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
         if self.parked:
-            # 주차 완료 → 모든 LED 점멸
+            # 주차 완료(예외) → 양쪽 점멸
             c = YELLOW if blink else OFF
             led1 = led2 = c
-        elif self.stop:
-            # 정지 → 빨강
+        elif self.stop and not self.start_park:
+            # 정지(횡단보도/신호/시작게이트) → 빨강. (주차 이동 중은 stop=True여도 '움직임'이라 제외)
             led1 = led2 = RED
-        elif self.doing_turn_right or self.turn_right or self.start_turn:
-            # 우회전 표지판/동작 중 또는 '코너 회전 중(start_turn)' → 우측(index2)만 노란 점멸.
-            #   [수정] start_turn 추가 — 일반 코너를 돌 때도 우측 깜빡이만 켜지게. go_signal(양쪽 점멸)보다
-            #   위에 둬서, 코너 직전 go표지판을 봐도 코너 중엔 양쪽이 아니라 우측만 깜빡이도록 우선한다.
-            led1 = OFF
+        elif self.start_turn or self.doing_turn_right:
+            # 움직이며 우회전 → 왼쪽 초록 유지, 오른쪽만 노랑 점멸
+            led1 = GREEN
             led2 = YELLOW if blink else OFF
-        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-            # 직진 표지판 인식(코너 아님) → 양쪽 노란 점멸
-            led1 = led2 = YELLOW if blink else OFF
         else:
-            # 주행 → 녹색
+            # 그 외 움직임(직진/주차이동 등) → 양쪽 초록
             led1 = led2 = GREEN
-        self.publish_leds(led1, led2)      # 온보드 RGB (기존 그대로)
-        self.update_breadboard_leds()      # [빵판] 온보드와 동일한 상태로 함께 표시
+        self.publish_leds(led1, led2)      # 온보드 RGB
+        self.update_breadboard_leds()      # [빵판] 동일 규격으로 함께 표시
 
-    # [빵판 LED] 온보드 LED와 '동일한' 상태를 빵판 다색 LED로도 표시.
-    #   온보드(update_leds)의 판정 순서와 동일하게 매핑. set_mode 가드가 있어 매 프레임 호출해도 안전(논블로킹).
-    #   매핑: 주차완료=전체점멸 / 정지·대기=빨강 / 우회전=우측노랑점멸 / 직진표지판=양쪽노랑점멸 / 주행=초록.
+    # [빵판 LED] 온보드와 동일 규격. set_mode 가드로 매 프레임 호출해도 안전(논블로킹).
+    #   매핑: 주차완료=전체 점멸 / 정지=빨강 / 우회전=초록 ON+우측 노랑 점멸 / 그 외 움직임=초록.
     def update_breadboard_leds(self):
         if not _BB_LED_OK:
             return
         try:
             if self.parked:
-                bb_led.mode_park_done()
-            elif self.stop:
-                bb_led.mode_stop()
-            elif self.doing_turn_right or self.turn_right or self.start_turn:
-                bb_led.mode_turn_right()   # 코너 회전(start_turn) 포함 → 우측만 점멸(양쪽 아님)
-            elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-                bb_led.mode_go()
+                bb_led.mode_park_done()                 # 전체 점멸
+            elif self.stop and not self.start_park:
+                bb_led.mode_stop()                      # 빨강
+            elif self.start_turn or self.doing_turn_right:
+                bb_led.mode_drive_right()               # 초록 ON + 우측 노랑 점멸
             else:
-                bb_led.mode_straight()
+                bb_led.mode_straight()                  # 초록
         except Exception as e:
             self.get_logger().warn('breadboard LED error: %s' % str(e))
 
