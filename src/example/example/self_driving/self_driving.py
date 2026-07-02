@@ -607,12 +607,14 @@ class SelfDrivingNode(Node):
         elif self.stop:
             # 정지 → 빨강
             led1 = led2 = RED
-        elif self.doing_turn_right or self.turn_right:
-            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
+        elif self.doing_turn_right or self.turn_right or self.start_turn:
+            # 우회전 표지판/동작 중 또는 '코너 회전 중(start_turn)' → 우측(index2)만 노란 점멸.
+            #   [수정] start_turn 추가 — 일반 코너를 돌 때도 우측 깜빡이만 켜지게. go_signal(양쪽 점멸)보다
+            #   위에 둬서, 코너 직전 go표지판을 봐도 코너 중엔 양쪽이 아니라 우측만 깜빡이도록 우선한다.
             led1 = OFF
             led2 = YELLOW if blink else OFF
         elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-            # 직진 표지판 인식 → 양쪽 노란 점멸
+            # 직진 표지판 인식(코너 아님) → 양쪽 노란 점멸
             led1 = led2 = YELLOW if blink else OFF
         else:
             # 주행 → 녹색
@@ -631,8 +633,8 @@ class SelfDrivingNode(Node):
                 bb_led.mode_park_done()
             elif self.stop:
                 bb_led.mode_stop()
-            elif self.doing_turn_right or self.turn_right:
-                bb_led.mode_turn_right()
+            elif self.doing_turn_right or self.turn_right or self.start_turn:
+                bb_led.mode_turn_right()   # 코너 회전(start_turn) 포함 → 우측만 점멸(양쪽 아님)
             elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
                 bb_led.mode_go()
             else:
