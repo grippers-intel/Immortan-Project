@@ -240,7 +240,7 @@ class SelfDrivingNode(Node):
             request = SetBool.Request()
             request.data = True
             self.set_running_srv_callback(request, SetBool.Response())
-        elif msg.state == 6 and self.start:  # 더블클릭, 주행 중일 때만
+        elif msg.state == 6:  # 더블클릭 - 언제든 초기화 가능
             self.get_logger().info(
                 "\033[1;32m%s\033[0m" % "더블클릭 - 대기 상태로 초기화"
             )
