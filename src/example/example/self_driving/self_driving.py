@@ -280,12 +280,12 @@ class SelfDrivingNode(Node):
         #   코너를 너무 빨리/일찍 도는 증상 → ↑ (진입 늦춤). lane_setpoint(130)보다 충분히 커야 함.
         #   캘리브레이션 개선 후 150→180→200 으로 단계적 상향.
         #   ※ 아래 main()의 lane_x 로그로 직선/코너 실제값을 보고 정밀 조정할 것.
-        self.turn_threshold = 150
+        self.turn_threshold = 200
         # turn_angular_z: 급회전 구간의 고정 회전 각속도(rad/s, 음수=우회전).
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   속도와 같은 비율로 스케일(반경 = speed/|angular|). 0.3→0.45라 -0.9→-1.35.
         #   ※ normal_speed를 바꾸면 이 값도 같은 비율로 바꿔야 함.
-        self.turn_angular_z = -1.35
+        self.turn_angular_z = -1.2
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.25
@@ -883,6 +883,10 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
+                    twist.linear.x = 0.04
+                    twist.angular.z = 0.5
+                    self.mecanum_pub.publish(twist)
+                    time.sleep(0.01)
 
                 if self.objects_info:
                     for i in self.objects_info:
