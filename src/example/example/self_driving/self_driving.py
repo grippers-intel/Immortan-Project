@@ -84,6 +84,9 @@ class SelfDrivingNode(Node):
         self.rgb_pub = self.create_publisher(
             RGBStates, "/ros_robot_controller/set_rgb", 10
         )
+        self.buzzer_pub = self.create_publisher(
+            BuzzerState, "/ros_robot_controller/set_buzzer", 1
+        )  # 파킹 완료 비프음용
 
         self.create_service(
             Trigger, "~/enter", self.enter_srv_callback
@@ -139,10 +142,13 @@ class SelfDrivingNode(Node):
         )
         self.start_light_red_seen = False  # 시작 red를 한 번이라도 봤는지
         self.start_light_red_last_time = 0  # 마지막으로 red 본 시각
+        self.red_stop_last_time = (
+            0  # 크로스워크 정지 중 마지막 red 감지 시각 (공백 1.5초 허용)
+        )
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
-                "linear_x": 0.5,
+                "linear_x": 0.45,  # 0.5→0.45 (안정성)
                 "angular_z": 0.0,
                 "pid_p": 0.4,
                 "pid_d": 0.05,
@@ -193,6 +199,9 @@ class SelfDrivingNode(Node):
         self.park_done = False  # 파킹 모션 완료 → 전체 LED 점멸용
         self.run_mode = (
             "normal"  # 구동 모드: "normal"(일반구동) / "parking"(우회전 후 파킹)
+        )
+        self.turn_then_park = (
+            False  # 표지판 우회전(차선로직) 완료 후 파킹모드 전환 플래그
         )
 
         self.count_crosswalk = 0
@@ -273,38 +282,33 @@ class SelfDrivingNode(Node):
             self.mecanum_pub.publish(Twist())
             self.param_init()
 
-    # TODO 02 : 교차로 우회전 동작 함수
+    # 파킹 전환용 우회전: 좌 0.3 / 우 0.15 (2:1), 약 83°까지 회전 후 파킹모드
     def turn_right_action(self):
         self.stop = True  # 주행 로직 잠시 멈춤
 
+        # 좌 0.3 / 우 0.15 → linear_x=(0.3+0.15)/2=0.225, angular_z=-(0.3-0.15)/(2×0.0925)=-0.811
         twist = Twist()
-        twist.linear.x = self.drive_params["turn_right"]["linear_x"]
-        twist.angular.z = self.drive_params["turn_right"]["angular_z"]
+        twist.linear.x = 0.225
+        twist.angular.z = -0.811
         self.mecanum_pub.publish(twist)
 
+        # 83° = 1.449rad, angular 0.811rad/s → 1.449/0.811 ≈ 1.79초
         turn_start = time.time()
-        crosswalk_hit = False
-        while (
-            time.time() - turn_start < 0.62
-        ):  # TODO : 0.72→0.62초 ≈ 50도 (angular_z=-1.4, 회전 중 전진 더 감소)
-            if self.crosswalk_box_height > 30:  # 회전 중 횡단보도 감지 시 즉시 중단
-                crosswalk_hit = True
-                break
+        while time.time() - turn_start < 1.79:
             time.sleep(0.03)
 
         self.mecanum_pub.publish(Twist())  # 정지
         self.stop = False  # 주행 로직 재개
-        self.turn_right = False  # 표지판 플래그 리셋
-        self.have_turn_right = False  # 우회전 완료 → 우회전 결정 리셋
-        self.count_right = 0  # 우회전 완료 → 표지판 카운트 리셋(다음 우회전용)
-        self.run_mode = "parking"  # 우회전 완료 → 파킹 모드로 전환(일반구동 종료)
-        self.accel_ramp_active = True  # 우회전 후 재출발 가속 구간
+        self.turn_right = False
+        self.have_turn_right = False  # 우회전 완료 → 결정 리셋
+        self.count_right = 0  # 표지판 카운트 리셋
+        self.run_mode = "parking"  # 우회전 완료 → 파킹 모드 전환
+        self.crosswalk_ignore = True  # 회전 후 횡단보도 재감지 방지
+        self.crosswalk_ignore_time = time.time()
+        self.pre_slow_down = False
+        self.accel_ramp_active = True
         self.accel_ramp_start_time = time.time()
-
-        if not crosswalk_hit:  # 정상 종료 시 횡단보도 재감지 방지
-            self.crosswalk_ignore = True
-            self.crosswalk_ignore_time = time.time()
-            self.pre_slow_down = False
+        self.get_logger().info("\033[1;35m우회전 83° 완료 → 파킹모드\033[0m")
 
     def get_node_state(self, request, response):
         response.success = True
@@ -381,6 +385,13 @@ class SelfDrivingNode(Node):
         twist = Twist()
         twist.linear.y = -0.2  # 오른쪽 이동 (메카넘). 방향 반대면 +0.2
         self.mecanum_pub.publish(twist)
+        # 주차 이동 중 비프음 (낮은 음 1000Hz, 빠른 삑삑) - 완료음과 구분
+        move_buzzer = BuzzerState()
+        move_buzzer.freq = 1000
+        move_buzzer.on_time = 0.15
+        move_buzzer.off_time = 0.15
+        move_buzzer.repeat = 25  # 이동 최대 6초 커버
+        self.buzzer_pub.publish(move_buzzer)
         t0 = time.time()
         while rclpy.ok():
             # 오른쪽으로 가면 정면 파킹표지판이 화면 왼쪽으로 이동 → park_x 감소, 30%(192) 도달 시 정지
@@ -390,9 +401,16 @@ class SelfDrivingNode(Node):
                 self.get_logger().info("파킹 타임아웃 - 정지")
                 break
             time.sleep(0.03)
-        self.mecanum_pub.publish(Twist())  # 정지
-        self.park_done = True  # 파킹 완료 → LED 점멸
-        self.get_logger().info("\033[1;35m파킹 완료\033[0m")
+        self.mecanum_pub.publish(Twist())  # 정지 (line_y 동작 멈춤)
+        self.park_done = True  # 파킹 완료 → 모든 등 점멸
+        # 파킹 완료 비프음 5초 (느리게: on0.5/off0.5 × 5 = 5초, 점멸 1초 주기와 동기화)
+        buzzer = BuzzerState()
+        buzzer.freq = 2000
+        buzzer.on_time = 0.5
+        buzzer.off_time = 0.5
+        buzzer.repeat = 5
+        self.buzzer_pub.publish(buzzer)
+        self.get_logger().info("\033[1;35m파킹 완료 → 점멸+비프 5초\033[0m")
 
     def main(self):
         while self.is_running:
@@ -444,7 +462,7 @@ class SelfDrivingNode(Node):
                         self.start_light_red_last_time = time.time()
                     elif (
                         self.start_light_red_seen
-                        and time.time() - self.start_light_red_last_time > 0.5
+                        and time.time() - self.start_light_red_last_time > 1.5
                     ):
                         go, reason = True, "빨간불 꺼짐"
                     elif (
@@ -533,9 +551,13 @@ class SelfDrivingNode(Node):
                             is_green = True
 
                     if is_red_stop:
-                        pass  # 빨간불(area>100) → 계속 대기 (green 오거나 red 꺼질 때까지)
+                        self.red_stop_last_time = time.time()  # red 볼 때마다 갱신
+
+                    # red를 1.5초 안에 봤으면 계속 대기 (감지 공백 허용). red 1.5초간 안 보이면 꺼진 것으로 판단
+                    if time.time() - self.red_stop_last_time < 1.5:
+                        pass  # 빨간불 대기 (green 와도 아래에서 처리되지만 red 우선)
                     elif self.have_turn_right and time.time() - self.stop_time > 0.7:
-                        # 우회전 표지판 5회 이상 누적 + 횡단보도 정지 0.7초 후 → 우회전
+                        # 표지판 5회 + 정지 0.7초 후 → 정해진 우회전(83°) 실행 → 완료 후 파킹모드
                         self.start_slow_down = False
                         threading.Thread(target=self.turn_right_action).start()
                     elif is_green and time.time() - self.stop_time > 0.5:
@@ -569,11 +591,11 @@ class SelfDrivingNode(Node):
                     self.set_drive_mode("straight")  # TODO 01 : 직진 모드 전환
                     # 속도는 차선 감지 후 아래에서 설정
 
-                # 파킹 모드 전용: 횡단보도 높이(box_height)가 6~12일 때 정지 후 파킹 маневр 시작
+                # 파킹 모드 전용: 횡단보도 높이(box_height)가 10~25일 때 정지 후 파킹 маневр 시작
                 if (
                     self.run_mode == "parking"
                     and not self.start_park
-                    and 6 <= self.crosswalk_box_height <= 12
+                    and 10 <= self.crosswalk_box_height <= 25
                 ):
                     self.mecanum_pub.publish(Twist())  # 전진 정지
                     self.start_park = True
@@ -646,22 +668,33 @@ class SelfDrivingNode(Node):
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
                             self.pid.SetPoint = 180  # TODO 도로 중앙값 조절 (...->170->200->180) 170원래값+10, 살짝만 왼쪽 (증가=왼쪽 확인됨)
-                            if (
+                            if self.run_mode == "parking":
+                                # 파킹모드: 차선 무시하고 직진. 횡단보도 보이면 가로중앙 추적하며 전진
+                                if (
+                                    self.crosswalk_distance > 0
+                                    and self.machine_type != "MentorPi_Acker"
+                                ):
+                                    err = self.crosswalk_center_x - (w / 2)
+                                    twist.angular.z = common.set_range(
+                                        -0.001 * err, -0.15, 0.15
+                                    )  # 횡단보도 중앙 추적 (err>0=횡단보도 오른쪽→우조향)
+                                self.pid.clear()  # 횡단보도 없으면 직진(angular 0 유지)
+                            elif (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
-                            ):  # 1.0초간 PID 없이 강제 직진 - 정지 후 PID 바로 재개하면 차선 줄무늬 오인식으로 좌우 비틀림 발생 (0.7s+차선보임조건 → 1.0s 무조건)
+                            ):  # 1.0초간 PID 없이 강제 직진
                                 twist.linear.x = self.drive_params["straight"][
                                     "linear_x"
                                 ]
                                 self.pid.clear()
                             elif (
                                 lane_x is not None and lane_x > 0
-                            ):  # 차선 보일 때만 PID 적용
+                            ):  # 차선 보일 때만 PID 적용 (일반모드)
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
                                         self.pid.output, -0.15, 0.15
-                                    )  # TODO : 0.18->0.13->0.18->0.13->0.15, SetPoint=240 + 클램프=0.15 (4cm 왼쪽 보정용)
+                                    )
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
@@ -670,17 +703,6 @@ class SelfDrivingNode(Node):
                                         )
                                         / 0.145
                                     )
-                            elif (
-                                self.run_mode == "parking"
-                                and self.crosswalk_distance > 0
-                                and self.machine_type != "MentorPi_Acker"
-                            ):
-                                # 파킹모드 + 차선 없음 + 횡단보도 보임 → 횡단보도 가로중앙을 이미지 중앙에 맞추게 조향
-                                err = self.crosswalk_center_x - (w / 2)
-                                twist.angular.z = common.set_range(
-                                    -0.001 * err, -0.15, 0.15
-                                )  # err>0(횡단보도 오른쪽)=로봇 왼쪽 → 우조향(-)
-                                self.pid.clear()
                             else:
                                 self.pid.clear()
                         else:
@@ -704,20 +726,26 @@ class SelfDrivingNode(Node):
                             ]["linear_x"]
                     # B: 회전 직후 1.5초간 저속(0.2) 접근 → 코너 횡단보도가 코앞(h=50)에 나타나도 코스팅 없이 그 자리 정지.
                     # start_turn(회전중)/pre_slow_down(횡단보도 감속중)일 땐 각자 로직 유지, 건드리지 않음
+                    # ★체크포인트: 아래 1.5초 = 저속 유지 시간(0.2×1.5=30cm). 줄이면 랩타임↑ 이지만 코너 횡단보도가
+                    #   30cm보다 멀면 놓쳐서 코스팅 위험. 로그상 #2가 회전 후 28cm라 1.5가 딱. 테스트로 이 값(1.5) 조정.
+                    POST_TURN_SLOW_SEC = 1.5  # ★튜닝 대상: 1.5→줄이면 빨리 0.45 복귀
                     if (
                         not self.start_turn
                         and not self.pre_slow_down
-                        and 0 < time.time() - self.turn_exit_time < 1.5
+                        and 0 < time.time() - self.turn_exit_time < POST_TURN_SLOW_SEC
                     ):
                         twist.linear.x = min(twist.linear.x, 0.2)
-                    # 파킹모드: 정지/파킹중 아니고 전진속도 미설정이면 저속 전진 (횡단보도 찾을 때까지 직진)
+                    # 파킹모드: 저속 직진 (차선 속도 무시). 횡단보도 감속(pre_slow_down) 중엔 creep 유지
+                    # ★체크포인트: 아래 PARKING_SPEED 튜닝 대상. 0.2로 먼저 테스트 →
+                    #   ① 중앙추적 값이 많이 안 흔들리고 ② 우회전 직후 횡단보도 바로 보여서 중앙정렬 쉬우면 → 속도 올려도 됨
+                    PARKING_SPEED = 0.2  # ★튜닝 대상
                     if (
                         self.run_mode == "parking"
                         and not self.stop
                         and not self.start_park
-                        and twist.linear.x <= 0
+                        and not self.pre_slow_down
                     ):
-                        twist.linear.x = 0.2
+                        twist.linear.x = PARKING_SPEED
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -726,7 +754,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.48
+                        turn_elapsed > 0.6
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
@@ -745,8 +773,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 0.8
-                    ):  # 0.9→0.8초 상한: angular_z=-1.4 기준 1.4×0.8=1.12rad≈64° (각도 더 축소)
+                        turn_elapsed > 1.0
+                    ):  # 0.8→1.0초 상한: angular_z=-1.4 기준 1.4×1.0=1.4rad≈80° (80° 목표)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
@@ -796,7 +824,9 @@ class SelfDrivingNode(Node):
 
                 # 파킹 완료 → 모든 RGB/전구 동시 점멸 (기존 LED 덮어씀)
                 if self.park_done:
-                    pk_blink = (time.time() % 0.6) < 0.3
+                    pk_blink = (
+                        time.time() % 1.0
+                    ) < 0.5  # 1초 주기 (완료 비프음과 동기화)
                     pk = 255 if pk_blink else 0
                     msg = RGBStates()
                     msg.states = [
@@ -844,8 +874,8 @@ class SelfDrivingNode(Node):
         if self.objects_info == []:  # If it is not recognized, reset the variable
             self.traffic_signs_status = None
             if (
-                time.time() - self.crosswalk_last_seen_time > 0.3
-            ):  # TODO : 깜빡임 방지, 0.3초간 이전값 유지
+                time.time() - self.crosswalk_last_seen_time > 0.8
+            ):  # 깜빡임 방지 0.3→0.8초: 감지 공백(~0.7초) 버텨서 재카운트/폭주 방지
                 self.crosswalk_distance = 0
         else:
             min_distance = 0
@@ -892,7 +922,7 @@ class SelfDrivingNode(Node):
                     self.count_right_miss = 0
                     if (
                         self.count_right >= 5
-                    ):  # 목표 카운트(5) 이상 쌓이면 우회전 준비 (실행은 횡단보도 정지 후)
+                    ):  # 목표 카운트(5) 이상 → 우회전 준비 (실행은 횡단보도 정지 후 turn_right_action)
                         self.have_turn_right = True
                 elif class_name == "park":
                     sign_h = abs(i.box[1] - i.box[3])
@@ -902,8 +932,8 @@ class SelfDrivingNode(Node):
                         f"[park raw] box_height: {sign_h}, box_width: {sign_w}, box_area: {box_area}"
                     )  # TODO : park 오인식 추적용 → 추가
                     if (
-                        box_area > 5000
-                    ):  # TODO 00 : 오인식 방지 1000→5000 (원거리 오인식 차단, 약 70×70px 이상만 허용)
+                        box_area >= 150
+                    ):  # 5000→150: park 표지판 area 150 이상이면 인식 (예민하게)
                         self.park_x = center[0]
                 elif (
                     class_name == "red" or class_name == "green"
@@ -935,7 +965,7 @@ class SelfDrivingNode(Node):
                 self.crosswalk_box_height = min_box_height
                 self.crosswalk_center_x = min_center_x  # 파킹모드 조향용 가로중앙
                 self.crosswalk_last_seen_time = time.time()
-            elif time.time() - self.crosswalk_last_seen_time > 0.3:
+            elif time.time() - self.crosswalk_last_seen_time > 0.8:
                 self.crosswalk_distance = 0
                 self.crosswalk_box_height = 0
 
