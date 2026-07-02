@@ -143,8 +143,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.375,  # TODO : 0.30→0.375 (좌0.5/우0.25 2:1 비율, track=0.185m 기준)
-                "angular_z": -1.2,  # TODO : -0.55→-1.35→-1.0→-1.2 (우회전량 증가, 오른쪽 바퀴 더 낮춤)
+                "linear_x": 0.45,  # TODO : 0.30→0.375→0.45 (직진 0.5에서 급감속 없애기)
+                "angular_z": -1.4,  # TODO : -0.55→-1.35→-1.0→-1.2→-1.4 (linear 올리면서 반경 유지)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -190,6 +190,9 @@ class SelfDrivingNode(Node):
         self.crosswalk_total_count = (
             0  # 총 횡단보도 감지 횟수 (홀수=정지, 짝수=통과, 9=주차)
         )
+        self.just_stopped_crosswalk = (
+            False  # 구버전: 정지 후 다음 횡단보도 강제 무시 플래그
+        )
         self.accel_ramp_active = False  # 정지 후 재출발 가속 구간 플래그
         self.accel_ramp_start_time = 0  # 가속 구간 시작 시간
         self.crosswalk_ignore = False  # TODO 00 : 횡단보도 무시 플래그 → 추가
@@ -206,7 +209,7 @@ class SelfDrivingNode(Node):
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.1  # normal driving speed
-        self.slow_down_speed = 0.05  # slowing down speed
+        self.slow_down_speed = 0.15  # slowing down speed (0.05→0.15: 너무 느려서 7초에 0.35m밖에 못 가 cw_h가 50 미달)
         self.pre_slow_down = False  # count=1 감지 시 pre-decel 플래그
 
         self.traffic_signs_status = None  # record the state of the traffic lights
@@ -442,8 +445,8 @@ class SelfDrivingNode(Node):
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if (
-                        time.time() - self.crosswalk_ignore_time > 1.5
-                    ):  # TODO : 3.5→6.0→1.5 - 재출발 후 0.75m 이동하면 충분히 이탈, 다음 횡단보도 간격 1m 이내
+                        time.time() - self.crosswalk_ignore_time > 1.2
+                    ):  # TODO : 3.5→6.0→1.5→0.65→0.8→1.2 - just_stopped_crosswalk 플래그가 코너 횡단보도 담당, ignore는 현재 횡단보도 통과만 커버 (1.2s≈57cm)
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
@@ -457,7 +460,16 @@ class SelfDrivingNode(Node):
                         self.get_logger().info(
                             f"\033[1;36m횡단보도 #{self.crosswalk_total_count} 감지\033[0m"
                         )
-                        if self.crosswalk_total_count % 2 == 0:
+                        if self.just_stopped_crosswalk:
+                            # 구버전: 정지 직후 다음 횡단보도는 무조건 강제 무시 (카운트 유지)
+                            self.get_logger().info(
+                                "\033[1;36m구버전: 정지 후 첫 횡단보도 강제 무시\033[0m"
+                            )
+                            self.just_stopped_crosswalk = False
+                            self.crosswalk_ignore = True
+                            self.crosswalk_ignore_time = time.time()
+                            self.count_crosswalk = 0
+                        elif self.crosswalk_total_count % 2 == 0:
                             # 짝수 (2,4,6,8번) → 즉시 통과 (정지 없음)
                             self.get_logger().info(
                                 "\033[1;36m짝수 횡단보도 → 통과\033[0m"
@@ -477,8 +489,8 @@ class SelfDrivingNode(Node):
 
                     if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
                         if (
-                            self.crosswalk_box_height > 50
-                        ):  # 30→60→50: 60은 box_height=83까지 기다려 너무 늦음, 50은 box_height=56에서 트리거
+                            self.crosswalk_box_height > 20
+                        ):  # 30→60→50→20: 50이면 camera32처럼 접근속도 느릴 때 횡단보도 위에 올라타야 50 도달, 20으로 낮춰 더 멀리서 정지
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -524,6 +536,9 @@ class SelfDrivingNode(Node):
                                 time.time()
                             )  # TODO 00 : 무시 시작 시간 → 추가
                             self.pre_slow_down = False
+                            self.just_stopped_crosswalk = (
+                                True  # 구버전: 다음 횡단보도 강제 무시
+                            )
                             self.accel_ramp_active = True  # 초록불 재출발 가속 구간
                             self.accel_ramp_start_time = time.time()
 
@@ -550,6 +565,9 @@ class SelfDrivingNode(Node):
                                     time.time()
                                 )  # TODO 00 : 무시 시작 시간 → 추가
                                 self.pre_slow_down = False
+                                self.just_stopped_crosswalk = (
+                                    True  # 구버전: 다음 횡단보도 강제 무시
+                                )
                                 self.accel_ramp_active = (
                                     True  # 횡단보도 재출발 가속 구간
                                 )
@@ -641,15 +659,14 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230, 차량이 조금 더 오른쪽으로 가도록 미세 조정)
+                            self.pid.SetPoint = 250  # TODO 도로 중앙값 조절 (245->230->250: 너무 왼쪽에 붙어서 우측 이동)
                             if (
                                 self.crosswalk_ignore
-                                and time.time() - self.crosswalk_ignore_time < 0.7
-                                and not (lane_x is not None and lane_x > 0)
-                            ):  # TODO : 0.7초간 "조향 금지"는 제거 - 비스듬하게 멈췄을 때 보정을 못 해서 오히려 박스4,5를 계속 못 찾는 원인이었을 가능성. 차선이 안 보일 때만 강제 전진(PID는 차선 보이면 바로 작동) → 수정
+                                and time.time() - self.crosswalk_ignore_time < 1.0
+                            ):  # 1.0초간 PID 없이 강제 직진 - 정지 후 PID 바로 재개하면 차선 줄무늬 오인식으로 좌우 비틀림 발생 (0.7s+차선보임조건 → 1.0s 무조건)
                                 twist.linear.x = self.drive_params["straight"][
                                     "linear_x"
-                                ]  # TODO : 차선 안 보여도 강제로 전진해서 횡단보도 줄무늬 구간을 지나가도록
+                                ]
                                 self.pid.clear()
                             elif (
                                 lane_x is not None and lane_x > 0
