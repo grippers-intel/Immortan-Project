@@ -130,12 +130,12 @@ class SelfDrivingNode(Node):
         self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
-        self.park_min_area = 700   # arm(주차 준비) 최소 면적. (1200→350→700: 350은 너무 낮아 멀리 있는 작은
-                                   #   표지판(area 352)에 arm→즉시 발사로 너무 일찍 주차. 700은 '멀리 작게'는 거르고
-                                   #   '충분히 가까움(중앙주행 peak≈1120)'만 arm. 너무 일찍이면 ↑, 아예 arm 안되면 ↓)
-        self.park_forward_time = 1.2  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
-                                      #   (1.0→0.8→1.2: 발사(px≈505)가 일관적인데 거기서 주차하면 주차칸 전에 짧게 멈춤 →
-                                      #    발사 후 전진 늘려 주차칸까지 도달. 여전히 짧으면 ↑, 넘어가면 ↓)
+        self.park_min_area = 400   # arm(주차 준비) 최소 면적. (700→400: 700은 arm이 늦어 발사가 px560대로 밀려
+                                   #   forward와 겹쳐 표지판 넘어뜨림. 400이면 arm 일찍 완료→발사 px≈505로 일관(4연속 테스트값).
+                                   #   멀리 작은 표지판(area 352)은 여전히 거름. 너무 일찍이면 ↑, arm 안되면 ↓)
+        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
+                                      #   (0.8→1.2→1.0: 0.8은 짧고 1.2는 넘어감(표지판 침). 발사 px≈505 기준 중간값 1.0.
+                                      #    여전히 짧으면 ↑(1.1), 넘어가면 ↓(0.9))
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
         self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
@@ -148,8 +148,8 @@ class SelfDrivingNode(Node):
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
-        self.park_lane_setpoint = 215  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215: 로봇 자연 위치가
-                                       #   right_x≈216인데 190으로 낮게 잡아 PID가 계속 우측으로 당겨 선 넘음 → 더 좌측 유지)
+        self.park_lane_setpoint = 230  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215→230: 막판 우측 바퀴가
+                                       #   라인 밟아 조금 더 좌측 유지. 우측 바퀴 계속 밟으면 ↑, 좌측으로 치우치면 ↓)
         self.park_angular_limit = 0.25 # [②] 우회전 후 우측라인 복구 각속도 제한. (0.4→0.25: 느린 접근속도(0.1)에서
                                        #   0.4는 반경 0.25m로 너무 급회전→오버슛으로 우측 라인 넘음. 파고듦 복구 약하면 ↑)
 
