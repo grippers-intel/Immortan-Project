@@ -289,7 +289,7 @@ class SelfDrivingNode(Node):
                 if self.object_sub is not None:
                     self.object_sub.unregister()
             except Exception as e:
-                # self.get_logger().info('\033[1;32m%s\033[0m' % str(e))
+                pass
             self.mecanum_pub.publish(Twist())
         self.param_init()
         response.success = True
