@@ -82,6 +82,17 @@ class SelfDrivingNode(Node):
         # 재시도할 수 있게 함(button_callback 참고).
         self.last_click_time = 0  # 마지막 "완료된 클릭"(state=0) 시각
         self.double_click_window = 0.5  # 이 시간(초) 내에 두 번 클릭하면 초기화로 판단. 오인식 잦으면 ↓, 잘 안 잡히면 ↑
+        # [10차 실차 테스트] 버튼을 눌러도 주행이 시작되지 않는 문제의 실제 원인을
+        # 로그로 확인: 물리적으로 한 번 누른 것으로 보이는데도 버튼 하드웨어/펌웨어가
+        # state=1 메시지를 아주 짧은 간격(0.143초)으로 중복 발행했고, 그 노이즈가
+        # 우연히 double_click_window(0.5초) 안에 들어와 "더블클릭"으로 오인식되어
+        # 방금 시작한 주행을 곧바로 reset_mission()으로 되돌려버렸음(로그: 시작 클릭 ->
+        # 0.819초 후 무시된 클릭(이때도 last_click_time이 갱신됨) -> 그로부터 0.143초
+        # 후 클릭 -> 더블클릭 오인식 -> 리셋). 사람이 의도적으로 두 번 누르는 간격
+        # (보통 0.2~0.5초)보다 확실히 짧은 노이즈성 중복 메시지를 아예 처리 전에
+        # 걸러내기 위한 디바운스 최소 간격.
+        self.last_button_msg_time = 0
+        self.button_debounce_time = 0.2  # 이 시간(초) 미만 간격의 연속 버튼 메시지는 노이즈로 간주해 무시. 진짜 클릭도 걸리면 ↓, 노이즈가 남으면 ↑
 
         self.mecanum_pub = self.create_publisher(Twist, "/controller/cmd_vel", 1)
         self.servo_state_pub = self.create_publisher(
@@ -549,6 +560,20 @@ class SelfDrivingNode(Node):
         if msg.state not in (0, 1):
             return
 
+        # [10차 실차 테스트] 버튼 하드웨어/펌웨어가 물리적으로 한 번 누른 것에 대해서도
+        # state=1 메시지를 짧은 간격(실측 0.143초)으로 중복 발행하는 것을 로그로 확인함.
+        # 이 노이즈성 중복 메시지가 아래 더블클릭 판정에 끼어들면(사람이 실제로 두 번
+        # 누르지 않았는데도) 방금 시작한 주행이 곧바로 초기화되어버림. 사람이 의도적으로
+        # 두 번 클릭하는 간격보다 확실히 짧은 중복 메시지는 더블클릭/시작 판정 이전에
+        # 아예 걸러낸다.
+        now = time.time()
+        if now - self.last_button_msg_time < self.button_debounce_time:
+            self.get_logger().info(
+                "\033[1;33m%s\033[0m" % "button message debounced (duplicate/noise)"
+            )
+            return
+        self.last_button_msg_time = now
+
         # [초기화 버튼] 시작 버튼을 짧은 시간(double_click_window) 내에 두 번 클릭하면
         # 초기화로 판단.
         # [8차 실차 테스트] 더블클릭 초기화가 전혀 동작 안 한다는 리포트 확인 후
@@ -558,7 +583,6 @@ class SelfDrivingNode(Node):
         # 카운트하던 로직이라 더블클릭 분기 자체가 한 번도 실행되지 않았던 것. 실제 관측된
         # state=1 기준으로 수정.
         if msg.state == 1:
-            now = time.time()
             if now - self.last_click_time <= self.double_click_window:
                 self.last_click_time = (
                     0  # 소비(연속 클릭이 리셋을 반복 유발하지 않도록)
