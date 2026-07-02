@@ -450,7 +450,7 @@ class SelfDrivingNode(Node):
                 gone = 0
             time.sleep(0.03)
         # self.get_logger().info('\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m' % (
-            time.time() - t0, self.crosswalk_distance))
+            # time.time() - t0, self.crosswalk_distance
         # 2단계: 전진하며 우회전
         twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
