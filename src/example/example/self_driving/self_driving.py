@@ -272,7 +272,8 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        # TODO
+        self.normal_speed = 0.35  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
@@ -681,9 +682,7 @@ class SelfDrivingNode(Node):
                         ):
                             self.turn_right = False
                             self.doing_turn_right = True
-                            threading.Thread(
-                                target=self.turn_right_action, daemon=True
-                            ).start()
+                            self.turn_right_action()
                     elif (
                         not self.start_park
                     ):  # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
@@ -756,7 +755,7 @@ class SelfDrivingNode(Node):
                             self.start_park = True
                             self.stop = True
                             self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
-                            threading.Thread(target=self.park_action).start()
+                            self.park_action()
 
                 # line following processing
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
