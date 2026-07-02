@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# encoding: utf-8
-# @data:2023/03/28
-# @author:aiden
-# autonomous driving
 import os
 import cv2
 import math
@@ -13,6 +8,7 @@ import threading
 import numpy as np
 import sdk.pid as pid
 import sdk.fps as fps
+import sdk.led as led
 from rclpy.node import Node
 import sdk.common as common
 # from app.common import Heart
@@ -575,26 +571,32 @@ class SelfDrivingNode(Node):
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
     def update_leds(self):
-        GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
+        now = time.time()
+        if now - self.last_led_update_time < self.led_update_interval and self.current_led_mode is not None:
+            return
+        self.last_led_update_time = now
+
         if self.parked:
-            # 주차 완료 → 모든 LED 점멸
-            c = YELLOW if blink else OFF
-            led1 = led2 = c
+            desired_mode = 'park_done'
         elif self.stop:
-            # 정지 → 빨강
-            led1 = led2 = RED
-        elif self.doing_turn_right or self.turn_right:
-            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-            led1 = OFF
-            led2 = YELLOW if blink else OFF
-        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-            # 직진 표지판 인식 → 양쪽 노란 점멸
-            led1 = led2 = YELLOW if blink else OFF
+            desired_mode = 'stop'
+        elif self.turn_right or self.doing_turn_right:
+            desired_mode = 'turn_right'
         else:
-            # 주행 → 녹색
-            led1 = led2 = GREEN
-        self.publish_leds(led1, led2)
+            desired_mode = 'straight'
+
+        if self.current_led_mode == desired_mode:
+            return
+
+        self.current_led_mode = desired_mode
+        if desired_mode == 'park_done':
+            led.mode_park_done()
+        elif desired_mode == 'stop':
+            led.mode_stop()
+        elif desired_mode == 'turn_right':
+            led.mode_turn_right()
+        else:
+            led.mode_straight()
 
     def main(self):
         while self.is_running:
@@ -872,6 +874,7 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
+        led.cleanup()
         rclpy.shutdown()
 
 
@@ -957,4 +960,5 @@ def main():
 if __name__ == "__main__":
     main()
 
+    
     
