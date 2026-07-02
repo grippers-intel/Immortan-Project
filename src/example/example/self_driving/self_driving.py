@@ -725,9 +725,8 @@ class SelfDrivingNode(Node):
                         ):
                             self.turn_right = False
                             self.doing_turn_right = True
-                            threading.Thread(
-                                target=self.turn_right_action, daemon=True
-                            ).start()
+                            # TODO - thread 삭제
+                            self.turn_right_action()
                     elif (
                         not self.start_park
                     ):  # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
@@ -788,7 +787,8 @@ class SelfDrivingNode(Node):
                             self.start_park = True
                             self.stop = True
                             self.going_to_park = False  # 주차 시작하므로 직진 모드 종료
-                            threading.Thread(target=self.park_action).start()
+                            # TODO - thread 삭제
+                            self.park_action()
                 else:
                     # [수정] 검출이 한 프레임 끊겨도 0으로 리셋하지 않고 1씩만 감소 → 드문드문 검출에 강하게.
                     #   (기존 self.count_park=0 은 한 번만 놓쳐도 처음부터 다시 세서 8을 못 채웠음)
