@@ -691,7 +691,12 @@ class SelfDrivingNode(Node):
                 if self.start_turn:
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
-                    if turn_elapsed > 0.8 and len(center_x) >= 4 and center_x[3] != -1:
+                    if (
+                        turn_elapsed > 0.8
+                        and len(center_x) >= 4
+                        and center_x[3] != -1
+                        and center_x[3] < 180
+                    ):  # <180: 실제 차선(x≈50~100), 횡단보도 stripe(x≈229) 제외
                         self.count_turn_exit += 1  # TODO : 박스5->박스4 기준 변경 - 박스5는 끝까지 안 돌아오는 경우가 많아서 너무 늦게 탈출/영영 탈출 못함
                         if (
                             self.count_turn_exit > 0
