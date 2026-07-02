@@ -71,6 +71,9 @@ class SelfDrivingNode(Node):
         # TODO(competition, 규정3/4 추가 구현): 출발 스위치 게이팅 및 주행중 LED 상태 표시
         self.require_start_button = True
         self.start_button_id = 1  # Tips 슬라이드 기준 Button1 (RRC 보드)
+        self.last_wait_reminder_time = (
+            0  # "버튼 대기중" 로그 스팸 방지용(3초 간격 제한)
+        )
         self.moving_led_state = (
             None  # 마지막으로 publish한 LED 상태(중복 publish 방지용)
         )
@@ -379,12 +382,24 @@ class SelfDrivingNode(Node):
 
     def button_callback(self, msg):
         # 규정3: 경연자가 로봇에 부착된 스위치(버튼)로 출발 신호를 전달.
-        # state 매핑은 ros_robot_controller_node.py의 pub_button_data 참고
-        # (1 = KEY_EVENT_PRESSED, 5 = KEY_EVENT_CLICK). 실제 버튼 눌림 반응성을
-        # 대회장에서 확인 후 필요하면 둘 중 하나로 좁힐 것.
+        # [버그 수정] 1차 실차 테스트에서 버튼을 눌러도 차가 전혀 출발하지 않고
+        # 로그에는 YOLO crosswalk 인식 로그(get_object_callback)만 계속 찍히는 문제가
+        # 있었음. 원인은 여기가 아니라 ros_robot_controller_node.py의 pub_button_data가
+        # 가진 벤더 버그였음: Board.get_button()은 이미 (key_id, 0=클릭, 1=눌림)으로
+        # 단순화해서 반환하는데, pub_button_data가 이 값을 다시 원본
+        # PacketReportKeyEvents(enum, 값 전부 1 이상) 기준 표로 조회해서, "클릭"에
+        # 해당하는 정수 0은 항상 매칭 실패 -> ButtonState 메시지 자체가 발행되지 않고
+        # "Unhandled button event: 0" 에러만 찍혔음(=버튼을 눌렀다 떼는 일반적인 클릭이
+        # 통째로 씹힘). 그 파일도 함께 수정해 이제는 0/1 두 상태 모두 정상 publish됨.
+        # 이 클래스에서는 그에 맞춰 기존에 잘못 가정했던 (1, 5) 대신 실제로 나올 수 있는
+        # 두 값 (0=클릭 완료, 1=눌린 상태) 모두를 시작 신호로 인정하도록 수정.
+        self.get_logger().info(
+            "\033[1;36m%s\033[0m"
+            % f"button msg received: id={msg.id}, state={msg.state}"
+        )  # 진단용: 버튼 입력 자체가 도달하는지 로그로 바로 확인 가능하게 함
         if msg.id != self.start_button_id:
             return
-        if msg.state not in (1, 5):
+        if msg.state not in (0, 1):
             return
         if self.enter and not self.start:
             self.get_logger().info(
@@ -717,7 +732,10 @@ class SelfDrivingNode(Node):
                         )  # go straight with normal speed
 
                 # line following processing
-                result_image, lane_angle, lane_x = self.lane_detect(
+                # [수정] lane_detect.py의 __call__이 near_x(가장 가까운 ROI만의 차선
+                # 중심)를 4번째 값으로 반환하도록 바뀌어서 4개로 unpack해야 함(예전 3개
+                # unpack이면 ValueError: too many values to unpack 크래시가 남).
+                result_image, lane_angle, lane_x, near_x = self.lane_detect(
                     binary_image, image.copy()
                 )  # the coordinate of the line while the robot is in the middle of the lane
                 # execute_turn_right()가 image_queue를 따로 소비하지 않고도 최신 차선
@@ -734,7 +752,13 @@ class SelfDrivingNode(Node):
                         if self.going_to_park
                         else self.angular_z_limit
                     )
-                    if lane_x > self.turn_threshold:
+                    # [수정] 코너 진입 판단은 near_x(가까운 ROI 기준)로 전환.
+                    # 기존에는 lane_x(=max_center_x, 먼 ROI까지 포함한 최댓값)를 써서
+                    # 차가 아직 직선 위에 있어도 저 멀리 있는 코너를 미리 감지해 회전을
+                    # 너무 일찍 트리거했음. near_x는 차 바로 앞(rois[0]) 기준이라 실제로
+                    # 코너에 도달한 시점에만 반응함. 직선 구간 PID 보정(아래 else 블록)은
+                    # 기존대로 lane_x를 그대로 사용.
+                    if near_x > self.turn_threshold:
                         self.count_turn += 1
                         if (
                             self.count_turn > self.turn_confirm_count
@@ -808,6 +832,18 @@ class SelfDrivingNode(Node):
                         )
 
             else:
+                # [진단용] 예전에는 버튼을 기다리는 동안 아무 로그도 안 찍혀서, 버튼 입력이
+                # 안 들어오는 상황과 다른 문제를 구분하기 어려웠음(1차 실차 테스트에서
+                # crosswalk 인식 로그만 계속 보여 헷갈렸던 원인 중 하나). 3초마다 한 번씩
+                # "대기중" 알림을 남겨서 로그만 보고도 상태를 바로 알 수 있게 함.
+                if self.require_start_button and not self.start:
+                    now = time.time()
+                    if now - self.last_wait_reminder_time > 3.0:
+                        self.last_wait_reminder_time = now
+                        self.get_logger().info(
+                            "\033[1;33m%s\033[0m"
+                            % "still waiting for start button (Button1) press..."
+                        )
                 time.sleep(0.01)
 
             bgr_image = cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR)
