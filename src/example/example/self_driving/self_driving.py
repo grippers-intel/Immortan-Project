@@ -15,7 +15,6 @@ import sdk.pid as pid
 import sdk.fps as fps
 from rclpy.node import Node
 import sdk.common as common
-# from app.common import Heart
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
@@ -26,7 +25,7 @@ from sdk.common import colors, plot_one_box
 from example.self_driving import lane_detect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState, RGBStates, RGBState, ButtonState
+from ros_robot_controller_msgs.msg import RGBStates, RGBState, ButtonState
 
 class SelfDrivingNode(Node):
     def __init__(self, name):
@@ -57,7 +56,6 @@ class SelfDrivingNode(Node):
         self.bridge = CvBridge()
         self.lock = threading.RLock()
         self.colors = common.Colors()
-        # signal.signal(signal.SIGINT, self.shutdown)
         self.machine_type = os.environ.get('MACHINE_TYPE')
         self.lane_detect = lane_detect.LaneDetector("yellow")
         # [추가] 우회전 후 주차장까지 갈 때 쓰는 '우측 라인' 전용 검출기.
@@ -68,7 +66,6 @@ class SelfDrivingNode(Node):
         self.lane_detect_right.set_roi(((338, 360, 320, 640, 0.7), (292, 315, 320, 640, 0.2), (248, 270, 320, 640, 0.1)))
 
         self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)
-        self.servo_state_pub = self.create_publisher(SetPWMServoState, 'ros_robot_controller/pwm_servo/set_state', 1)
         # [LED] 온보드 RGB LED 2개(RGB1=index1, RGB2=index2) 제어용 발행자.
         self.rgb_pub = self.create_publisher(RGBStates, '/ros_robot_controller/set_rgb', 1)
         self.result_publisher = self.create_publisher(Image, '~/image_result', 1)
@@ -88,7 +85,6 @@ class SelfDrivingNode(Node):
         self.create_service(Trigger, '~/enter', self.enter_srv_callback) # enter the game
         self.create_service(Trigger, '~/exit', self.exit_srv_callback) # exit the game
         self.create_service(SetBool, '~/set_running', self.set_running_srv_callback)
-        # self.heart = Heart(self.name + '/heartbeat', 5, lambda _: self.exit_srv_callback(None))
         timer_cb_group = ReentrantCallbackGroup()
         self.client = self.create_client(Trigger, '/yolov5_ros2/init_finish')
         self.client.wait_for_service()
@@ -116,7 +112,6 @@ class SelfDrivingNode(Node):
             request.data = False
             self.set_running_srv_callback(request, SetBool.Response())
 
-        #self.park_action() 
         threading.Thread(target=self.main, daemon=True).start()
         self.create_service(Trigger, '~/init_finish', self.get_node_state)
         self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
@@ -126,9 +121,6 @@ class SelfDrivingNode(Node):
         self.enter = False
         self.right = True
 
-        self.have_turn_right = False
-        self.detect_turn_right = False
-        self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_cy = -1        # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
@@ -210,15 +202,12 @@ class SelfDrivingNode(Node):
                                           #   (150→200: 조금 더 일찍 '지나감' 판단 → 우회전을 살짝 일찍 시작)
         self.turn_right_forward_max = 2.6 # 정규화 전진 최대 시간(초, 타임아웃). 횡단보도 검출 실패해도 여기서 회전
 
-        self.last_park_detect = False
-        self.count_park = 0  
+        self.count_park = 0
         self.stop = False  # stopping sign
         self.start_park = False  # start parking sign
         self.parked = False  # 주차 완료(이후 영구 정지). 주차가 마지막 미션이므로 끝나면 안 움직임
 
-        self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
-        self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
@@ -287,7 +276,6 @@ class SelfDrivingNode(Node):
                                            #   코너 중 1~2프레임 순간 누락으로 좌회전하던 오발동 방지. 재출발 지연되면 ↓
 
         self.traffic_signs_status = None  # record the state of the traffic lights
-        self.red_loss_count = 0
         # [신호등] 초록불을 멀어서 못 잡아 못 출발하던 문제 → '빨강 신선도' 방식.
         #   빨강이 최근(red_hold_time 이내)에 보였으면 빨강으로 간주. 초록으로 바뀌면 빨강이 사라지고
         #   red_hold_time 후 is_red=False → 출발(초록을 직접 검출하지 않아도 됨). 빨강은 잘 잡히는 전제.
@@ -657,6 +645,11 @@ class SelfDrivingNode(Node):
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
                         self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
+                        # [코너 상태 종료] 횡단보도에서 멈추면 코너는 확실히 끝난 것. start_turn을 여기서 풀어야
+                        #   재출발 시 차선 재획득 로직이 '코너 중'으로 오인돼 막히지 않는다. (예전 전역 타임아웃
+                        #   방식은 긴 코너 중간에 start_turn을 풀어 오발동시켰음 → 정지 진입 시점에만 해제로 변경)
+                        self.start_turn = False
+                        self.count_turn = 0
                     stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
                     if stopped_enough and not is_red:
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
@@ -782,12 +775,6 @@ class SelfDrivingNode(Node):
                 self.get_logger().info('\033[1;35mTURN? start_turn=%s lane_x=%d far=%d thr=%d stop=%s doing=%s go2park=%s start_park=%s\033[0m' % (
                     self.start_turn, lane_x, lane_x_far, self.turn_threshold,
                     self.stop, self.doing_turn_right, self.going_to_park, self.start_park))
-                # [start_turn 전역 타임아웃] 코너 회전 상태는 시작 후 turn_recover_time이 지나면 무조건 해제.
-                #   (예전엔 차선추종 분기 안에서만 해제 → 정지/차선상실 중엔 안 풀려, 재획득 로직이 계속
-                #    '코너 중'으로 오인돼 막혔음.) 이걸로 코너가 끝나야 재획득이 동작한다.
-                if self.start_turn and (time.time() - self.start_turn_time_stamp > self.turn_recover_time):
-                    self.start_turn = False
-
                 if not self.start_park and self.going_to_park and not self.stop:
                     # [수정] '우회전 이후(going_to_park)'에만 우측 라인 접근 모드. (park_x>0 조건 제거 —
                     #   출발선에서 park 표지판이 보이면 오작동하던 문제). '우측 라인'을 PID로 추종.
