@@ -77,6 +77,11 @@ class SelfDrivingNode(Node):
         self.moving_led_state = (
             None  # 마지막으로 publish한 LED 상태(중복 publish 방지용)
         )
+        # [초기화 버튼] 시작 버튼(Button1)을 더블클릭하면 초기화(리셋)로 동작.
+        # 실차 테스트 중 문제가 생겨도 로봇을 재부팅하지 않고 바로 대기 상태로 되돌려
+        # 재시도할 수 있게 함(button_callback 참고).
+        self.last_click_time = 0  # 마지막 "완료된 클릭"(state=0) 시각
+        self.double_click_window = 0.5  # 이 시간(초) 내에 두 번 클릭하면 초기화로 판단. 오인식 잦으면 ↓, 잘 안 잡히면 ↑
 
         self.mecanum_pub = self.create_publisher(Twist, "/controller/cmd_vel", 1)
         self.servo_state_pub = self.create_publisher(
@@ -307,6 +312,18 @@ class SelfDrivingNode(Node):
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
+        self.crosswalk_passed_time = (
+            0  # crosswalk_passed가 True로 바뀐 시각(아래 timeout 판단용)
+        )
+        # [3차 실차 테스트] 정지 후 재출발했는데도 계속 저속 주행하다가 다음 횡단보도를
+        # 완전히 무시해버린 문제의 원인: crosswalk_passed는 crosswalk_distance가
+        # turn_right_pass_dist(150) 밑으로 내려가야만 리셋되는데, score 필터를 낮춘 뒤로
+        # 통과한 횡단보도 주변에서 낮은 신뢰도의 잔여/오검출이 간헐적으로 계속 잡혀
+        # crosswalk_distance가 그 문턱 밑으로 절대 안 내려가는 경우가 있었음(hold_time이
+        # 매번 갱신되며 사실상 무한정 유지됨). 그 결과 crosswalk_passed가 영원히 True로
+        # 남아 다음 횡단보도의 정지 트리거 자체가 다시는 걸리지 않았음. 자연 리셋이 실패해도
+        # 이 시간(초) 이상 지나면 강제로 리셋해 다음 횡단보도를 위해 재무장시키는 안전장치.
+        self.crosswalk_passed_timeout = 3.0
         # [1차 실차 테스트] 횡단보도를 지나쳐서야 멈추는 문제의 원인: get_object_callback이
         # 이 프레임에 crosswalk가 하나도 안 잡히면(YOLO 프레임 드랍/박스가 화면 하단에서
         # 잠깐 잘리는 등) crosswalk_distance를 즉시 0으로 되돌렸음. main()의 정지 판단은
@@ -466,6 +483,21 @@ class SelfDrivingNode(Node):
             return
         if msg.state not in (0, 1):
             return
+
+        # [초기화 버튼] 시작 버튼을 짧은 시간(double_click_window) 내에 두 번 클릭하면
+        # 초기화로 판단. "완료된 클릭"(state=0)만 카운트함 - state=1(눌린 상태)까지
+        # 같이 세면 한 번의 물리적 클릭에서 두 상태가 연달아 들어와도 더블클릭으로
+        # 오인식할 위험이 있음.
+        if msg.state == 0:
+            now = time.time()
+            if now - self.last_click_time <= self.double_click_window:
+                self.last_click_time = (
+                    0  # 소비(연속 클릭이 리셋을 반복 유발하지 않도록)
+                )
+                self.reset_mission()
+                return
+            self.last_click_time = now
+
         if self.enter and not self.start:
             self.get_logger().info(
                 "\033[1;32m%s\033[0m" % "start button pressed -> begin driving"
@@ -473,6 +505,25 @@ class SelfDrivingNode(Node):
             request = SetBool.Request()
             request.data = True
             self.set_running_srv_callback(request, SetBool.Response())
+
+    def reset_mission(self):
+        # [초기화 버튼] 시작 버튼 더블클릭 시 호출됨. 구독(image/object)은 이미 살아있고
+        # 다시 만들 필요가 없으므로 손대지 않고, 미션 상태만 param_init()으로 초기화한 뒤
+        # enter만 복구해 이후 단일 클릭으로 다시 시작할 수 있게 함.
+        # 주의: 우회전/주차 동작 스레드(execute_turn_right/approach_and_park)가 실행
+        # 중일 때 리셋하면 그 스레드는 끝까지 자기 twist를 계속 publish함 - 동작 중
+        # 리셋은 권장하지 않음(대기/정지 상태에서 사용할 것을 전제로 함).
+        self.get_logger().info(
+            "\033[1;33m%s\033[0m" % "double-click detected -> resetting mission state"
+        )
+        self.mecanum_pub.publish(Twist())
+        self.param_init()
+        self.enter = True
+        self.update_status_led(False)  # 정지 상태 LED (규정4)
+        self.get_logger().info(
+            "\033[1;32m%s\033[0m"
+            % "reset complete - waiting for start button (Button1) press..."
+        )
 
     def set_rgb(self, red, green, blue):
         # 보드 내장 RGB1/RGB2 두 개를 동일 색상으로 설정
@@ -686,13 +737,12 @@ class SelfDrivingNode(Node):
                             self.crosswalk_stop_time = time.time()
                     else:
                         self.count_crosswalk = 0
-                if (
-                    self.crosswalk_passed
-                    and self.crosswalk_distance < self.turn_right_pass_dist
+                if self.crosswalk_passed and (
+                    self.crosswalk_distance < self.turn_right_pass_dist
+                    or time.time() - self.crosswalk_passed_time
+                    > self.crosswalk_passed_timeout
                 ):
-                    self.crosswalk_passed = (
-                        False  # 이번 횡단보도를 벗어남 -> 다음 횡단보도를 위해 리셋
-                    )
+                    self.crosswalk_passed = False  # 이번 횡단보도를 벗어남(또는 timeout) -> 다음 횡단보도를 위해 리셋
 
                 if self.crosswalk_stopping:
                     if (
@@ -703,6 +753,7 @@ class SelfDrivingNode(Node):
                     else:
                         self.crosswalk_stopping = False
                         self.crosswalk_passed = True
+                        self.crosswalk_passed_time = time.time()
                         self.stop = False
                 elif red_stop:
                     self.stop = True
@@ -788,7 +839,15 @@ class SelfDrivingNode(Node):
                 )
 
                 if not blocked:
-                    if self.crosswalk_distance > self.crosswalk_approach_dist:
+                    # [3차 실차 테스트] crosswalk_passed 여부와 무관하게 crosswalk_distance만
+                    # 보고 감속했더니, 이미 정지-재출발까지 끝낸 횡단보도의 잔여/오검출로
+                    # distance가 계속 높게 잡히는 동안 정상속도로 복귀하지 못하고 다음
+                    # 횡단보도 구간까지 계속 저속 주행하는 문제가 있었음. 이번 횡단보도를
+                    # 아직 처리 전(=crosswalk_passed가 False)일 때만 접근 감속을 적용.
+                    if (
+                        self.crosswalk_distance > self.crosswalk_approach_dist
+                        and not self.crosswalk_passed
+                    ):
                         twist.linear.x = (
                             self.crosswalk_approach_speed
                         )  # 횡단보도 접근 감속
@@ -976,6 +1035,18 @@ class SelfDrivingNode(Node):
                 elif class_name == "right":  # obtain the right turning sign
                     # 규정8: 표지판이 충분히 가까울 때만 카운트(멀리서 오검출 방지).
                     # 확정되면 turn_right=True -> main()의 execute_turn_right()가 소비함
+                    # [진단용] 3차 실차 테스트에서 우회전 표지판을 끝내 인식하지 못하고
+                    # 직진해버린 원인이 area 필터 때문인지(표지판이 보여도 area가 부족해
+                    # 카운트가 안 됨), 아니면 애초에 "right" 클래스 자체가 검출되지 않은
+                    # 것인지(비전/모델 문제) 구분할 데이터가 없어 임계값을 또 추측으로
+                    # 바꾸지 않음. 대신 검출될 때마다 area/count_right 값을 로그로 남겨,
+                    # 다음 로그를 보고 area 필터가 원인이면 right_min_area를, 아예 안
+                    # 잡히는 거면 모델/카메라 쪽을 봐야 함을 판단할 수 있게 함.
+                    self.get_logger().info(
+                        "\033[1;34m%s\033[0m"
+                        % f"right sign candidate: area={area:.0f} "
+                        f"(min={self.right_min_area}) count_right={self.count_right + 1}"
+                    )
                     if area >= self.right_min_area:
                         self.count_right += 1
                         self.count_right_miss = 0
