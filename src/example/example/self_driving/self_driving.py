@@ -126,8 +126,8 @@ class SelfDrivingNode(Node):
         self.timer = self.create_timer(
             0.0, self.init_process, callback_group=timer_cb_group
         )
-        # TODO : LED 초기화
-        led.all_off()
+        # # TODO : LED 초기화
+        # led.all_off()
 
     def init_process(self):
         self.timer.cancel()
@@ -426,10 +426,10 @@ class SelfDrivingNode(Node):
             time.sleep(1.5)
         self.mecanum_pub.publish(Twist())
         self.parked = True  # 주차 완료 → main 루프가 이후 계속 정지 유지
-        # TODO : park LED, shutdown
-        led.mode_park_done()
-        time.sleep(5)
-        self.shutdown()
+        # # TODO : park LED, shutdown
+        # led.mode_park_done()
+        # time.sleep(5)
+        # self.shutdown()
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
@@ -460,8 +460,8 @@ class SelfDrivingNode(Node):
             % (time.time() - t0, self.crosswalk_distance)
         )
         # 2단계: 전진하며 우회전
-        # TODO : right led
-        led.mode_turn_right()
+        # # TODO : right led
+        # led.mode_turn_right()
 
         twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
@@ -470,8 +470,8 @@ class SelfDrivingNode(Node):
         self.doing_turn_right = False  # 차선추종 재개
         self.going_to_park = True  # 이후 주차장까지는 직진만(좌측 라인 이탈 방지)
 
-        # TODO
-        led.all_off()
+        # # TODO
+        # led.all_off()
 
     # [LED] 두 RGB LED 색 발행. 색이 바뀔 때만 발행(점멸/상태변화 시에만).
     def publish_leds(self, c1, c2):
