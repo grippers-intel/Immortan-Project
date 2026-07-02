@@ -574,6 +574,15 @@ class SelfDrivingNode(Node):
             request = SetBool.Request()
             request.data = True
             self.set_running_srv_callback(request, SetBool.Response())
+        else:
+            # [진단용] 10차 실차 테스트: 버튼 메시지는 로그에 찍히는데(button msg
+            # received) 주행이 시작되지 않는 증상 보고. 위 if가 조용히 아무것도 안 하고
+            # 넘어가면 그 이유(아직 enter 전인지, 이미 start된 상태인지)가 로그에 전혀
+            # 남지 않아 원인을 특정할 수 없었음. 다음 재현 시 바로 구분 가능하도록 남김.
+            self.get_logger().info(
+                "\033[1;33m%s\033[0m"
+                % f"button press ignored: enter={self.enter} start={self.start}"
+            )
 
     def reset_mission(self):
         # [초기화 버튼] 시작 버튼 더블클릭 시 호출됨. 구독(image/object)은 이미 살아있고
