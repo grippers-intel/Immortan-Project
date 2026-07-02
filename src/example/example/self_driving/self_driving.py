@@ -101,17 +101,33 @@ class SelfDrivingNode(Node):
         self.create_service(Trigger, "~/exit", self.exit_srv_callback)  # exit the game
         self.create_service(SetBool, "~/set_running", self.set_running_srv_callback)
         # self.heart = Heart(self.name + '/heartbeat', 5, lambda _: self.exit_srv_callback(None))
+        # [진단용] 아래 wait_for_service()들은 yolov5_ros2 노드가 서비스를 올릴 때까지
+        # 무한정 블로킹함(타임아웃 없음). YOLO가 CPU 추론 모델을 불러오는 동안 라즈베리
+        # 파이에서 꽤 오래 걸릴 수 있는데, 그동안 로그가 하나도 없어서 "멈춘 건지 정상
+        # 대기인지" 구분이 안 됐음(1차 실차 테스트에서 self_driving이 시작 로그 없이
+        # 20초 넘게 멈춰있다가 조작자가 Ctrl-C로 종료한 사례 있음). 최소한 뭘 기다리는지
+        # 보이게 로그를 남김.
         timer_cb_group = ReentrantCallbackGroup()
+        self.get_logger().info(
+            "\033[1;33m%s\033[0m" % "waiting for /yolov5_ros2/init_finish service..."
+        )
         self.client = self.create_client(Trigger, "/yolov5_ros2/init_finish")
         self.client.wait_for_service()
+        self.get_logger().info(
+            "\033[1;33m%s\033[0m" % "waiting for /yolov5/start service..."
+        )
         self.start_yolov5_client = self.create_client(
             Trigger, "/yolov5/start", callback_group=timer_cb_group
         )
         self.start_yolov5_client.wait_for_service()
+        self.get_logger().info(
+            "\033[1;33m%s\033[0m" % "waiting for /yolov5/stop service..."
+        )
         self.stop_yolov5_client = self.create_client(
             Trigger, "/yolov5/stop", callback_group=timer_cb_group
         )
         self.stop_yolov5_client.wait_for_service()
+        self.get_logger().info("\033[1;32m%s\033[0m" % "all yolov5 services ready")
 
         self.timer = self.create_timer(
             0.0, self.init_process, callback_group=timer_cb_group
@@ -122,7 +138,19 @@ class SelfDrivingNode(Node):
 
         self.mecanum_pub.publish(Twist())
         if not self.get_parameter("only_line_follow").value:
+            # [진단용] 1차 실차 테스트 로그에서 self_driving이 시작 로그를 하나도
+            # 못 찍고 20초 넘게 멈춰있다가(조작자가 답답해서 Ctrl-C로 강제종료) 그제서야
+            # "self driving enter"가 찍힌 사례가 있었음. 원인은 아래 send_request()가
+            # 응답을 기다리는 구간이었는데, 그동안 로그가 전혀 없어서 멈춘 건지 정상
+            # 대기 중인지 구분이 안 됐음. YOLO(CPU 추론)가 라즈베리파이에서 기동이
+            # 느릴 수 있으므로, 최소한 지금 뭘 기다리는지는 보이게 로그를 남김.
+            self.get_logger().info(
+                "\033[1;33m%s\033[0m"
+                % "requesting yolov5 to start (waiting for /yolov5/start response, "
+                "may take a while on first CPU inference)..."
+            )
             self.send_request(self.start_yolov5_client, Trigger.Request())
+            self.get_logger().info("\033[1;32m%s\033[0m" % "yolov5 start acknowledged")
         time.sleep(1)
 
         self.display = True
@@ -331,10 +359,17 @@ class SelfDrivingNode(Node):
         return response
 
     def send_request(self, client, msg):
+        # [성능 수정] 원래 코드는 sleep 없이 while rclpy.ok(): 만 도는 바쁜 대기라
+        # 이 동안 코어 하나를 100%로 계속 태우면서 응답을 기다렸음. 라즈베리파이에서
+        # YOLO(device=cpu 추론)도 같이 무거운 작업을 하는 도중이라, 이 바쁜 대기가
+        # CPU를 잡아먹어 오히려 YOLO 응답을 더 늦추고 - self_driving이 몇십 초씩
+        # 멈춘 것처럼 보이는 원인이 됐음(1차 실차 로그에서 확인, init_process 참고).
+        # 짧은 sleep으로 다른 스레드/프로세스에 CPU를 양보하도록 수정.
         future = client.call_async(msg)
         while rclpy.ok():
             if future.done() and future.result():
                 return future.result()
+            time.sleep(0.01)
 
     def enter_srv_callback(self, request, response):
         self.get_logger().info("\033[1;32m%s\033[0m" % "self driving enter")
