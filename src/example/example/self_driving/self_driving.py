@@ -259,9 +259,7 @@ class SelfDrivingNode(Node):
         #   코너 안쪽으로 파고들면 절댓값 ↓, 못 돌고 바깥으로 나가면 절댓값 ↑.
         #   속도와 같은 비율로 스케일(반경 = speed/|angular|). 0.3→0.45라 -0.9→-1.35.
         #   ※ normal_speed를 바꾸면 이 값도 같은 비율로 바꿔야 함.
-        #   [튜닝] 모든 코너에서 약간씩 과회전(안쪽으로 파고듦) → 절댓값을 낮춰 회전 반경을 넓힘.
-        #   -1.35→-1.15. 여전히 과회전이면 더 ↓(-1.05), 이제 못 돌고 바깥으로 나가면 ↑(-1.25).
-        self.turn_angular_z = -1.15
+        self.turn_angular_z = -1.35
         # angular_z_limit: 직선 PID 보정 출력의 최대 회전 각속도(rad/s) 제한.
         #   직선에서 좌우 흔들림(진동)이 크면 ↓.
         self.angular_z_limit = 0.25
@@ -278,6 +276,12 @@ class SelfDrivingNode(Node):
         #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
         #   갑툭튀 횡단보도를 느린 상태로 만나 제때 멈추게 함.
         self.turn_recover_time = 2.5
+        # [차선 재획득] 코너 직후 로봇이 우측을 향하면 좌측 노란 라인이 ROI(x 0~320) 밖으로 나가
+        #   lane_x=-1(미검출)이 됨. 이때 아무 명령도 안 내리면 로봇이 멈춰버려(특히 횡단보도/신호등
+        #   정지 후 재출발 때) 라인을 영영 못 잡아 출발을 못 함. → 천천히 전진하며 좌회전해 좌측 라인을
+        #   화면 안으로 다시 끌어온다. 여기서만 쓰는 저속/저각속도.
+        self.lane_recover_speed = 0.1      # 재획득용 저속 전진(m/s). 너무 빨라 이탈하면 ↓
+        self.lane_recover_angular = 0.3    # 좌회전(+)으로 좌측 라인을 화면 안으로. 복구 느리면 ↑, 지나쳐 좌로 튀면 ↓
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -840,10 +844,22 @@ class SelfDrivingNode(Node):
                     self.get_logger().info('\033[1;32mDRIVE lin=%.2f ang=%.2f (start_turn=%s lane_x=%d)\033[0m' % (
                         twist.linear.x, twist.angular.z, self.start_turn, lane_x))
                     self.mecanum_pub.publish(twist)
+                elif (not self.start_park and not self.going_to_park and not self.stop
+                        and not self.doing_turn_right):
+                    # [차선 재획득] 여기 도달 = 위 elif의 lane_x>=0 조건이 실패 → lane_x<0(차선 미검출).
+                    #   주행 상태(정지/주차/우회전/주차경로 아님)인데 라인을 잃음(코너 직후 우측을 봐서
+                    #   좌측 라인이 ROI 밖). 예전엔 아래 else로 빠져 아무 명령도 안 나가 로봇이 멈췄고,
+                    #   그래서 횡단보도/신호등 정지 후 초록이어도 재출발을 못 했음.
+                    #   → 저속 전진+좌회전으로 좌측 라인을 화면 안으로 끌어와 재획득한다.
+                    self.pid.clear()
+                    twist.linear.x = self.lane_recover_speed
+                    twist.angular.z = self.lane_recover_angular
+                    self.get_logger().info('\033[1;33mLANE LOST -> recover (creep+left) lane_x=%d\033[0m' % lane_x)
+                    self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
 
-             
+
                 if self.objects_info:
                     for i in self.objects_info:
                         box = i.box
