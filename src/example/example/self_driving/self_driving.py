@@ -605,8 +605,6 @@ class SelfDrivingNode(Node):
                         and center_x[4] == -1
                         and time.time() - self.crosswalk_ignore_time
                         > 1.1  # 1.8→0.5→1.1: 0.5로 줄이면 교차로 직후 false turn(0.8s), 1.8이면 camera26 코너 차단(1.5s)
-                        and time.time() - self.crosswalk_raw_last_seen_time
-                        > 0.5  # 횡단보도 줄무늬가 YOLO에 마지막 보인 후 0.5s 동안 false turn 차단
                         and not self.pre_slow_down  # 횡단보도 접근 중 false turn 방지
                     ):
                         self.count_turn += 1  # TODO : drift 감지 제거 - 0.5m/s에서 진짜 코너 drift(88px)가 기준(70px) 초과해서 카운트 리셋되는 문제 → 수정
