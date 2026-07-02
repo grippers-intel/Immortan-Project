@@ -361,6 +361,7 @@ class SelfDrivingNode(Node):
         self.image_sub = None
         self.objects_info = []
         self.led_update_interval = 0.1
+        self.current_led_mode = None
 
     def get_node_state(self, request, response):
         response.success = True
@@ -1109,7 +1110,7 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
-        led.cleanup()
+        # led.cleanup()
         rclpy.shutdown()
 
     # Obtain the target detection result
