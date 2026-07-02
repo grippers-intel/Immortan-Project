@@ -209,7 +209,13 @@ class SelfDrivingNode(Node):
         self.count_right = 0
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
-        self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
+        # [5차 실차 테스트, docs/test2_log.txt 분석] "right sign candidate" 진단 로그로
+        # 확인한 결과, 실제로는 "right" 클래스가 area=552로 딱 2프레임만 잡히고 그 뒤로
+        # 다시는 안 잡혔음(전체 로그에 2번뿐) - 표지판이 보이는 창이 매우 좁고, 그마저도
+        # right_min_area=1000의 절반 수준이라 카운트 자체가 안 됐던 것으로 확인됨.
+        # 400으로 낮추고, 확정 카운트도 5->2로 낮춰 이 좁은 창 안에서 트리거될 수 있게 함.
+        self.right_min_area = 400
+        self.right_confirm_count = 2
         self.turn_right_set_time = (
             0  # turn_right가 True로 확정된 시각(아래 timeout 판단용)
         )
@@ -883,6 +889,15 @@ class SelfDrivingNode(Node):
                 # execute_turn_right()가 image_queue를 따로 소비하지 않고도 최신 차선
                 # 위치를 읽을 수 있도록 공유 상태로 남겨둠(회전/정지 중에도 계속 갱신)
                 self.latest_lane_x = lane_x
+                # [진단용] 5차 실차 테스트에서 코너 직전 "lane detect가 제대로 동작하지
+                # 않아 오른쪽 블록으로 들어감" 문제가 보고됐는데, 지금까지는 lane_x/near_x를
+                # 로그로 남기지 않아 그 순간 차선 인식이 완전히 실패했는지(lane_x=-1)
+                # 아니면 근접 ROI만 잘못 잡혔는지 구분할 수 없었음. 다음 로그에서 코너
+                # 구간의 실제 값을 볼 수 있도록 매 프레임 남김.
+                self.get_logger().info(
+                    "\033[1;35m%s\033[0m"
+                    % f"lane_x={lane_x} near_x={near_x} start_turn={self.start_turn}"
+                )
                 if lane_x >= 0 and not blocked:
                     lane_setpoint = (
                         self.park_lane_setpoint
@@ -949,6 +964,25 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
+                    self.mecanum_pub.publish(twist)
+                elif not blocked:
+                    # [5차 실차 테스트] lane_x == -1(3개 ROI 전부 라인 인식 실패)일 때 기존엔
+                    # 조향을 전혀 걸지 않아(angular.z=0) 직진 상태 그대로 코너를 지나쳐버렸음.
+                    # 코너 도중 순간적으로 라인을 놓치면 그대로 직진해 바깥쪽(오른쪽) 블록으로
+                    # 돌진하는 것으로 추정(로그에서 이 구간의 lane_x/near_x를 확인 못해 확정은
+                    # 못했지만, 코드상 이 경로가 유일하게 "조향 없음"이 되는 지점). 최근에
+                    # 코너로 판단해 회전 중이었다면(start_turn, turn_recover_time 이내) 라인을
+                    # 다시 잡을 때까지 마지막 회전 방향을 유지해 최소한 코너 바깥으로 그대로
+                    # 직진하는 것은 피함.
+                    if (
+                        self.start_turn
+                        and time.time() - self.start_turn_time_stamp
+                        < self.turn_recover_time
+                    ):
+                        if self.machine_type != "MentorPi_Acker":
+                            twist.angular.z = self.turn_angular_z
+                        else:
+                            twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -1062,7 +1096,7 @@ class SelfDrivingNode(Node):
                         self.count_right += 1
                         self.count_right_miss = 0
                         if (
-                            self.count_right >= 5
+                            self.count_right >= self.right_confirm_count
                         ):  # If it is detected multiple times, take the right turning sign to true
                             if not self.turn_right:
                                 self.turn_right_set_time = time.time()
