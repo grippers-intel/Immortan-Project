@@ -15,6 +15,7 @@ import sdk.pid as pid
 import sdk.fps as fps
 from rclpy.node import Node
 import sdk.common as common
+# from app.common import Heart
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
@@ -25,7 +26,7 @@ from sdk.common import colors, plot_one_box
 from example.self_driving import lane_detect
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from ros_robot_controller_msgs.msg import RGBStates, RGBState, ButtonState
+from ros_robot_controller_msgs.msg import BuzzerState, SetPWMServoState, PWMServoState, RGBStates, RGBState, ButtonState
 
 class SelfDrivingNode(Node):
     def __init__(self, name):
@@ -56,6 +57,7 @@ class SelfDrivingNode(Node):
         self.bridge = CvBridge()
         self.lock = threading.RLock()
         self.colors = common.Colors()
+        # signal.signal(signal.SIGINT, self.shutdown)
         self.machine_type = os.environ.get('MACHINE_TYPE')
         self.lane_detect = lane_detect.LaneDetector("yellow")
         # [추가] 우회전 후 주차장까지 갈 때 쓰는 '우측 라인' 전용 검출기.
@@ -66,6 +68,7 @@ class SelfDrivingNode(Node):
         self.lane_detect_right.set_roi(((338, 360, 320, 640, 0.7), (292, 315, 320, 640, 0.2), (248, 270, 320, 640, 0.1)))
 
         self.mecanum_pub = self.create_publisher(Twist, '/controller/cmd_vel', 1)
+        self.servo_state_pub = self.create_publisher(SetPWMServoState, 'ros_robot_controller/pwm_servo/set_state', 1)
         # [LED] 온보드 RGB LED 2개(RGB1=index1, RGB2=index2) 제어용 발행자.
         self.rgb_pub = self.create_publisher(RGBStates, '/ros_robot_controller/set_rgb', 1)
         self.result_publisher = self.create_publisher(Image, '~/image_result', 1)
@@ -85,6 +88,7 @@ class SelfDrivingNode(Node):
         self.create_service(Trigger, '~/enter', self.enter_srv_callback) # enter the game
         self.create_service(Trigger, '~/exit', self.exit_srv_callback) # exit the game
         self.create_service(SetBool, '~/set_running', self.set_running_srv_callback)
+        # self.heart = Heart(self.name + '/heartbeat', 5, lambda _: self.exit_srv_callback(None))
         timer_cb_group = ReentrantCallbackGroup()
         self.client = self.create_client(Trigger, '/yolov5_ros2/init_finish')
         self.client.wait_for_service()
@@ -112,6 +116,7 @@ class SelfDrivingNode(Node):
             request.data = False
             self.set_running_srv_callback(request, SetBool.Response())
 
+        #self.park_action() 
         threading.Thread(target=self.main, daemon=True).start()
         self.create_service(Trigger, '~/init_finish', self.get_node_state)
         self.get_logger().info('\033[1;32m%s\033[0m' % 'start')
@@ -121,6 +126,9 @@ class SelfDrivingNode(Node):
         self.enter = False
         self.right = True
 
+        self.have_turn_right = False
+        self.detect_turn_right = False
+        self.detect_far_lane = False
         self.park_x = -1  # obtain the x-pixel coordinate of a parking sign
         self.park_cy = -1        # 주차 표지판(최대 박스) 중심 y픽셀 (뎁스 샘플링용)
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
@@ -137,8 +145,8 @@ class SelfDrivingNode(Node):
         self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
         self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.7    # 전진 이동 = fwd - 이 값. (0.1→0.5→0.7: 여전히 주차칸을 지나쳐 주차 →
-                                        #   전진량을 더 줄임. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
+        self.park_standoff_fwd = 0.5    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
+                                        #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
         self.park_standoff_right = 0.15 # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         self.odom_x = 0.0
         self.odom_y = 0.0
@@ -202,12 +210,15 @@ class SelfDrivingNode(Node):
                                           #   (150→200: 조금 더 일찍 '지나감' 판단 → 우회전을 살짝 일찍 시작)
         self.turn_right_forward_max = 2.6 # 정규화 전진 최대 시간(초, 타임아웃). 횡단보도 검출 실패해도 여기서 회전
 
-        self.count_park = 0
+        self.last_park_detect = False
+        self.count_park = 0  
         self.stop = False  # stopping sign
         self.start_park = False  # start parking sign
         self.parked = False  # 주차 완료(이후 영구 정지). 주차가 마지막 미션이므로 끝나면 안 움직임
 
+        self.count_crosswalk = 0
         self.crosswalk_distance = 0  # distance to the zebra crossing
+        self.crosswalk_length = 0.1 + 0.3  # the length of zebra crossing and the robot
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
@@ -265,17 +276,9 @@ class SelfDrivingNode(Node):
         #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
         #   갑툭튀 횡단보도를 느린 상태로 만나 제때 멈추게 함.
         self.turn_recover_time = 2.5
-        # [차선 재획득] 코너 직후 로봇이 우측을 향하면 좌측 노란 라인이 ROI(x 0~320) 밖으로 나가
-        #   lane_x=-1(미검출)이 됨. 이때 아무 명령도 안 내리면 로봇이 멈춰버려(특히 횡단보도/신호등
-        #   정지 후 재출발 때) 라인을 영영 못 잡아 출발을 못 함. → 천천히 전진하며 좌회전해 좌측 라인을
-        #   화면 안으로 다시 끌어온다. 여기서만 쓰는 저속/저각속도.
-        self.lane_recover_speed = 0.1      # 재획득용 저속 전진(m/s). 너무 빨라 이탈하면 ↓
-        self.lane_recover_angular = 0.3    # 좌회전(+)으로 좌측 라인을 화면 안으로. 복구 느리면 ↑, 지나쳐 좌로 튀면 ↓
-        self.lane_lost_count = 0           # 연속으로 라인을 잃은 프레임 수(디바운스용)
-        self.lane_lost_frames = 5          # 이만큼 연속 미검출이면 '진짜 이탈'로 보고 재획득 시작.
-                                           #   코너 중 1~2프레임 순간 누락으로 좌회전하던 오발동 방지. 재출발 지연되면 ↓
 
         self.traffic_signs_status = None  # record the state of the traffic lights
+        self.red_loss_count = 0
         # [신호등] 초록불을 멀어서 못 잡아 못 출발하던 문제 → '빨강 신선도' 방식.
         #   빨강이 최근(red_hold_time 이내)에 보였으면 빨강으로 간주. 초록으로 바뀌면 빨강이 사라지고
         #   red_hold_time 후 is_red=False → 출발(초록을 직접 검출하지 않아도 됨). 빨강은 잘 잡히는 전제.
@@ -645,16 +648,14 @@ class SelfDrivingNode(Node):
                     if not self.crosswalk_stopping:
                         self.crosswalk_stopping = True
                         self.crosswalk_stop_time = time.time()  # 정지 시작 시각 기록
-                        # [코너 상태 종료] 횡단보도에서 멈추면 코너는 확실히 끝난 것. start_turn을 여기서 풀어야
-                        #   재출발 시 차선 재획득 로직이 '코너 중'으로 오인돼 막히지 않는다. (예전 전역 타임아웃
-                        #   방식은 긴 코너 중간에 start_turn을 풀어 오발동시켰음 → 정지 진입 시점에만 해제로 변경)
-                        self.start_turn = False
-                        self.count_turn = 0
                     stopped_enough = (time.time() - self.crosswalk_stop_time) > self.crosswalk_stop_duration
                     if stopped_enough and not is_red:
                         self.crosswalk_passed = True   # 통과 허용 → 이후 차선추종으로 진행
                         self.crosswalk_stopping = False
                         self.stop = False
+                        # [진단 로그] 횡단보도 정지 해제(재출발) 순간 마커. 이 직후 로그에서 NO-CMD(idle)가
+                        #   lane_x=-1 로 찍히면 = 재출발 시 좌측 라인을 못 잡아 멈춘 것(가설 확정).
+                        self.get_logger().info('\033[1;42m=== CROSSWALK PASSED -> RESUME (lane_x가 결정) ===\033[0m')
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
                         #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
                         #   재무장돼 주차 중에 두 번째 우회전이 실행되어 주차를 망치던 버그 방지.
@@ -801,7 +802,6 @@ class SelfDrivingNode(Node):
                         twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
                     self.mecanum_pub.publish(twist)
                 elif not self.start_park and lane_x >= 0 and not self.stop and not self.doing_turn_right:  # 우회전/주차 동작 중엔 차선추종 양보
-                    self.lane_lost_count = 0  # 라인을 잡았으니 미검출 카운터 리셋
                     if lane_x > self.turn_threshold:  # [튜닝] 급회전 진입 임계값 (param_init의 turn_threshold)
                         self.count_turn += 1
                         if self.count_turn > self.turn_confirm_count and not self.start_turn:  # [3단계] 회전 진입 확정 (param_init의 turn_confirm_count)
@@ -841,27 +841,14 @@ class SelfDrivingNode(Node):
                     self.get_logger().info('\033[1;32mDRIVE lin=%.2f ang=%.2f (start_turn=%s lane_x=%d)\033[0m' % (
                         twist.linear.x, twist.angular.z, self.start_turn, lane_x))
                     self.mecanum_pub.publish(twist)
-                elif (not self.start_park and not self.going_to_park and not self.stop
-                        and not self.doing_turn_right and not self.start_turn):
-                    # [차선 재획득] 여기 도달 = 위 elif의 lane_x>=0 조건이 실패 → lane_x<0(차선 미검출).
-                    #   [가드] not start_turn: 코너 회전 중(또는 회전 직후 복귀 중)엔 절대 재획득하지 않음.
-                    #     코너 돌 때 가까운 ROI에서 라인이 잠깐 -1로 빠지는데, 여기서 좌회전하면 코너를
-                    #     망치고 '멈췄다가 갑자기 왼쪽으로' 감. 코너가 끝나(start_turn 해제) 진짜 이탈일 때만 복구.
-                    #   [디바운스] lane_lost_frames 연속 미검출일 때만 발동 — 1~2프레임 순간 누락 무시.
-                    self.lane_lost_count += 1
-                    if self.lane_lost_count >= self.lane_lost_frames:
-                        # 지속적 미검출 = 재출발 시 우측 응시 등 진짜 이탈 → 저속 전진+좌회전으로 재획득.
-                        self.pid.clear()
-                        twist.linear.x = self.lane_recover_speed
-                        twist.angular.z = self.lane_recover_angular
-                        self.get_logger().info('\033[1;33mLANE LOST -> recover (creep+left) lane_x=%d cnt=%d\033[0m' % (
-                            lane_x, self.lane_lost_count))
-                        self.mecanum_pub.publish(twist)
-                    else:
-                        # 아직 순간 누락 판정 구간 → 아무 것도 발행하지 않아 직전 명령 유지.
-                        self.pid.clear()
                 else:
                     self.pid.clear()
+                    # [진단 로그] 이 프레임에 cmd_vel을 전혀 발행하지 않음 = 로봇이 그 자리에 정지 유지.
+                    #   "코너 후 우측 응시 → lane_x=-1 → 횡단보도 재출발 불가" 증상을 확정하기 위한 로그.
+                    #   어떤 조건으로 여기 왔는지(차선상실/정지/주차/우회전) 매 프레임 출력.
+                    #   특히 stop=False, start_park=False, doing_turn=False 인데 lane_x=-1 이면 = 차선상실로 멈춘 것.
+                    self.get_logger().info('\033[1;41mNO-CMD(idle) lane_x=%d far=%d | stop=%s start_park=%s doing_turn=%s go2park=%s\033[0m' % (
+                        lane_x, lane_x_far, self.stop, self.start_park, self.doing_turn_right, self.going_to_park))
 
 
                 if self.objects_info:
