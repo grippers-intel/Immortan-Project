@@ -46,7 +46,7 @@ class SelfDrivingNode(Node):
         # [② 우회전 후 복귀용 PID] 직진용 self.pid(0.01)는 휘청 방지로 아주 약함 → 회전 직후 우측라인으로
         #   당겨오는 힘이 부족. going_to_park 우측라인 추종은 더 단단한 전용 게인을 씀(파고듦 빠르게 복구).
         #   여전히 파고들면 P ↑, 우측라인 넘어 반대로 튀면 P ↓.
-        self.pid_park = pid.PID(0.02, 0.0, 0.003)
+        self.pid_park = pid.PID(0.012, 0.0, 0.003)  # (0.02→0.012: 느린 접근속도에서 과보정→우측 라인 넘던 것 완화)
         self.param_init()
 
         self.fps = fps.FPS()  
@@ -147,8 +147,10 @@ class SelfDrivingNode(Node):
         self.park_gone_count = 0       # armed 후 표지판이 연속으로 안 보인 프레임 수
         self.park_gone_frames = 3      # armed 후 이만큼 연속으로 안 보이면(우측으로 사라짐) fire
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
-        self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
-        self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
+        self.park_lane_setpoint = 215  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). (190→215: 로봇 자연 위치가
+                                       #   right_x≈216인데 190으로 낮게 잡아 PID가 계속 우측으로 당겨 선 넘음 → 더 좌측 유지)
+        self.park_angular_limit = 0.25 # [②] 우회전 후 우측라인 복구 각속도 제한. (0.4→0.25: 느린 접근속도(0.1)에서
+                                       #   0.4는 반경 0.25m로 너무 급회전→오버슛으로 우측 라인 넘음. 파고듦 복구 약하면 ↑)
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
