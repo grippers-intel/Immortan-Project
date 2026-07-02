@@ -13,7 +13,9 @@ import threading
 import numpy as np
 import sdk.pid as pid
 import sdk.fps as fps
-import sdk.led as led  # TODO:
+
+# TODO : LED import
+import sdk.led as led
 from rclpy.node import Node
 import sdk.common as common
 
@@ -33,6 +35,7 @@ from ros_robot_controller_msgs.msg import (
     PWMServoState,
     RGBStates,
     RGBState,
+    ButtonState,
 )
 
 
@@ -50,7 +53,16 @@ class SelfDrivingNode(Node):
         #   - P(0.4): 차선 중심에서 벗어난 만큼 즉시 조향. 반응이 둔하면 ↑, 좌우로 흔들리면 ↓
         #   - I(0.0): 정상상태 오차 누적 보정. 한쪽으로 치우쳐 달리면 아주 조금만 ↑ (와인드업 주의)
         #   - D(0.05): 흔들림 감쇠(댐핑). 직선에서 좌우 진동이 크면 ↑
-        self.pid = pid.PID(0.4, 0.0, 0.05)
+        # [튜닝] 직진 휘청거림(뱅뱅 진동) 수정: 기존 P=0.4,D=0.05는 출력 클램프(±angular_z_limit=0.25)
+        #   대비 수십 배 커서 오차 1px에도 최대 조향으로 포화 → 좌우로 계속 튕김.
+        #   비례제어가 되도록 대폭 낮춤. error 50px→0.5(클램프 0.25, 실편차엔 여전히 풀조향),
+        #   error 15px→0.15(부드럽게), error<deadband→직진. 여전히 흔들리면 P 더 ↓ 또는 deadband ↑.
+        #   반대로 완만한 굽이에서 못 따라가면 P 다시 ↑.
+        self.pid = pid.PID(0.01, 0.0, 0.002)
+        # [② 우회전 후 복귀용 PID] 직진용 self.pid(0.01)는 휘청 방지로 아주 약함 → 회전 직후 우측라인으로
+        #   당겨오는 힘이 부족. going_to_park 우측라인 추종은 더 단단한 전용 게인을 씀(파고듦 빠르게 복구).
+        #   여전히 파고들면 P ↑, 우측라인 넘어 반대로 튀면 P ↓.
+        self.pid_park = pid.PID(0.02, 0.0, 0.003)
         self.param_init()
 
         self.fps = fps.FPS()
@@ -86,6 +98,13 @@ class SelfDrivingNode(Node):
         )
         self.result_publisher = self.create_publisher(Image, "~/image_result", 1)
 
+        # [스위치 출발] 온보드 버튼(확장보드 key1/key2)으로 주행 시작.
+        #   버튼 이벤트는 /ros_robot_controller/button 으로 발행됨(ButtonState: id=1/2, state).
+        #   규칙: 스위치로 출발(자동출발 -5 감점 방지). 버튼 누르면 button_callback에서 self.start=True.
+        self.create_subscription(
+            ButtonState, "/ros_robot_controller/button", self.button_callback, 1
+        )
+
         self.create_service(
             Trigger, "~/enter", self.enter_srv_callback
         )  # enter the game
@@ -107,13 +126,13 @@ class SelfDrivingNode(Node):
         self.timer = self.create_timer(
             0.0, self.init_process, callback_group=timer_cb_group
         )
+        # TODO : LED 초기화
+        led.all_off()
 
     def init_process(self):
         self.timer.cancel()
 
         self.mecanum_pub.publish(Twist())
-        # TODO
-        led.mode_stop()
         if not self.get_parameter("only_line_follow").value:
             self.send_request(self.start_yolov5_client, Trigger.Request())
         time.sleep(1)
@@ -121,8 +140,10 @@ class SelfDrivingNode(Node):
         if 1:  # self.get_parameter('start').value:
             self.display = True
             self.enter_srv_callback(Trigger.Request(), Trigger.Response())
+            # [스위치 출발] 자동출발 금지. enter로 카메라/YOLO 구독만 준비하고 start=False로 대기.
+            #   온보드 버튼을 누르면 button_callback에서 self.start=True 가 되어 주행 시작한다.
             request = SetBool.Request()
-            request.data = True
+            request.data = False
             self.set_running_srv_callback(request, SetBool.Response())
 
         # self.park_action()
@@ -134,9 +155,6 @@ class SelfDrivingNode(Node):
         self.start = False
         self.enter = False
         self.right = True
-
-        # TODO: led
-        self.led_state = None
 
         self.have_turn_right = False
         self.detect_turn_right = False
@@ -151,6 +169,7 @@ class SelfDrivingNode(Node):
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
+        self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
 
         self.start_turn_time_stamp = 0
         self.count_turn = 0
@@ -182,9 +201,17 @@ class SelfDrivingNode(Node):
         )
         #   (0.8→1.1: 조금 일찍 돌아 안쪽 라인 밟던 것 → 더 들어간 뒤 회전)
         self.turn_right_duration = (
-            3.5  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            3.3  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
-        #   (3.0→3.2→3.5: 계속 90도에 모자라 회전량 더 증가)
+        #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
+        #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
+        # [③ 시작점 정규화] 우회전은 개방루프라 정지 위치가 매번 달라지면 도착 라인도 달라짐.
+        #   최소 직진(turn_right_forward_time) 후, 횡단보도가 완전히 지나갈 때까지(거리<pass_dist) 추가 전진 →
+        #   항상 '횡단보도를 막 지난 지점'에서 회전 시작 → 시작점 일정. (검출 실패 대비 타임아웃 있음)
+        self.turn_right_pass_dist = (
+            150  # crosswalk_distance가 이 값 미만이면 '횡단보도 지나감'으로 판단
+        )
+        self.turn_right_forward_max = 2.6  # 정규화 전진 최대 시간(초, 타임아웃). 횡단보도 검출 실패해도 여기서 회전
 
         self.last_park_detect = False
         self.count_park = 0
@@ -198,19 +225,23 @@ class SelfDrivingNode(Node):
 
         # [횡단보도 정지] 규칙: 횡단보도 앞 반드시 정지 후 출발. (기존 코드는 감속만 했고
         #   slow_down_speed가 normal_speed와 같아 감속조차 안 보였음)
-        self.crosswalk_stop_dist = 210  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
-        #   (260→210: 0.45+15fps라 늦게 잡혀 지나쳐 정지 → 더 일찍 정지)
+        self.crosswalk_stop_dist = 320  # crosswalk_distance가 이 값보다 크면(가까우면) 정지. 값↑=더 가까이서 멈춤.
+        #   (210→320: 횡단보도가 y≈300에 처음 잡혀 바로 멈춰 '약간 일찍'이던 것 →
+        #    더 가까이(320)서 멈춤. 지나치면 ↓, 여전히 이르면 ↑)
         self.crosswalk_min_area = (
-            2200  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
+            1800  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
         )
-        #   여전히 걸러짐. (3000→2200: 더 멀리서 미리 잡아 정지 여유 확보)
+        #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
         self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
+        self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
+        self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
         # ===== [1단계] 차선추종(Lane Keeping) 튜닝 파라미터 =====
@@ -237,14 +268,16 @@ class SelfDrivingNode(Node):
         # lane_deadband: 직선 보정 데드밴드(픽셀). |lane_x - lane_setpoint|가 이 값 이내면
         #   조향하지 않고 직진(미세 진동 제거). 0이면 비활성(원래 동작).
         #   [복원] 효과가 뚜렷하지 않아 6 → 0(비활성)으로 되돌림. 필요시 4~8로 재시도 가능.
-        self.lane_deadband = 0
+        #   [재활성] P를 비례제어로 낮춘 것과 함께 미세 jitter 제거용으로 10 적용. 더 흔들리면 ↑(12~15).
+        self.lane_deadband = 10
         # [3단계] turn_confirm_count: 회전 진입 확정에 필요한 연속 검출 프레임 수.
         #   값 ↑ 이면 코너를 더 신중히(늦게) 진입해 오검출 방지, 값 ↓ 이면 민감하게 빨리 진입.
         self.turn_confirm_count = 5
         # turn_recover_time: 회전 시작 후 PID 직선보정으로 복귀하기까지의 유지 시간(초).
         #   회전 직후 치우치면 ↓(예: 1.0), 회전이 덜 끝난 채 흔들리면 ↑.
-        #   [복원] 1.5 → 2.0(원래)으로 되돌림.
-        self.turn_recover_time = 2.0
+        #   [복원] 1.5 → 2.0. 코너 직후 감속(corner_speed) 지속시간도 이 값 → 2.5로 늘려 코너 직후
+        #   갑툭튀 횡단보도를 느린 상태로 만나 제때 멈추게 함.
+        self.turn_recover_time = 2.5
 
         self.traffic_signs_status = None  # record the state of the traffic lights
         self.red_loss_count = 0
@@ -261,8 +294,6 @@ class SelfDrivingNode(Node):
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
-        # TODO:
-        led.all_off()
 
     def get_node_state(self, request, response):
         response.success = True
@@ -317,6 +348,19 @@ class SelfDrivingNode(Node):
         response.message = "set_running"
         return response
 
+    def button_callback(self, msg):
+        # [스위치 출발] 온보드 버튼이 눌리면 주행 시작.
+        #   state=1(PRESSED 눌림), 5(CLICK 클릭) 둘 다 시작 트리거로 인정. id(key1/key2)는 무시(둘 중 아무 버튼).
+        #   enter(초기화)가 끝난 뒤에만, 아직 출발 전(not start)일 때만 반응 → 주행 중 오작동 방지.
+        if msg.state in (1, 5) and self.enter and not self.start:
+            self.get_logger().info(
+                "\033[1;32m%s\033[0m"
+                % ("START button pressed (id=%d) -> 주행 시작" % msg.id)
+            )
+            with self.lock:
+                self.start = True
+
+    # TODO : shutdown 수정
     def shutdown(self):  # press 'ctrl+c' to close the program
         self.is_running = False
 
@@ -382,9 +426,8 @@ class SelfDrivingNode(Node):
             time.sleep(1.5)
         self.mecanum_pub.publish(Twist())
         self.parked = True  # 주차 완료 → main 루프가 이후 계속 정지 유지
-        # TODO
+        # TODO : park LED, shutdown
         led.mode_park_done()
-        self.shutdown()
 
     # 우회전 동작 (우회전 표지판 + 횡단보도 정지 후 실행). park_action처럼 별도 스레드로 동작.
     def turn_right_action(self):
@@ -392,14 +435,35 @@ class SelfDrivingNode(Node):
         twist = Twist()
         twist.linear.x = self.turn_right_speed
         twist.angular.z = 0.0
-        # TODO
-        led.mode_turn_right()
-        self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_forward_time)
+        # 1-a) 최소 직진(기존 동작 보장): 오검출로 너무 일찍 회전하는 것 방지.
+        t0 = time.time()
+        while time.time() - t0 < self.turn_right_forward_time:
+            self.mecanum_pub.publish(twist)
+            time.sleep(0.03)
+        # 1-b) [③ 시작점 정규화] 횡단보도가 완전히 지나갈 때까지(거리<pass_dist, 3프레임 연속) 추가 전진.
+        #   정지 위치가 매번 달라도 '횡단보도를 막 지난 지점'에서 회전이 시작됨 → 시작점 일정.
+        #   검출이 안 끊기거나 실패해도 turn_right_forward_max 타임아웃으로 반드시 회전으로 넘어감.
+        gone = 0
+        while time.time() - t0 < self.turn_right_forward_max:
+            self.mecanum_pub.publish(twist)
+            if self.crosswalk_distance < self.turn_right_pass_dist:
+                gone += 1
+                if gone >= 3:
+                    break
+            else:
+                gone = 0
+            time.sleep(0.03)
+        self.get_logger().info(
+            "\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m"
+            % (time.time() - t0, self.crosswalk_distance)
+        )
         # 2단계: 전진하며 우회전
+        # TODO : right led
+        led.mode_turn_right()
+
         twist.angular.z = self.turn_right_angular
         self.mecanum_pub.publish(twist)
-        time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝
+        time.sleep(self.turn_right_duration)  # 90도 맞춰 튜닝(② 살짝 덜 돌림)
         self.mecanum_pub.publish(Twist())  # 정지
         self.doing_turn_right = False  # 차선추종 재개
         self.going_to_park = True  # 이후 주차장까지는 직진만(좌측 라인 이탈 방지)
@@ -422,55 +486,33 @@ class SelfDrivingNode(Node):
 
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
-    # def update_leds(self):
-    #     GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-    #     blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
-    #     if self.parked:
-    #         # 주차 완료 → 모든 LED 점멸
-    #         c = YELLOW if blink else OFF
-    #         led1 = led2 = c
-    #     elif self.stop:
-    #         # 정지 → 빨강
-    #         led1 = led2 = RED
-    #     elif self.doing_turn_right or self.turn_right:
-    #         # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-    #         led1 = OFF
-    #         led2 = YELLOW if blink else OFF
-    #     elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-    #         # 직진 표지판 인식 → 양쪽 노란 점멸
-    #         led1 = led2 = YELLOW if blink else OFF
-    #     else:
-    #         # 주행 → 녹색
-    #         led1 = led2 = GREEN
-    #     self.publish_leds(led1, led2)
-
-    # [LED] 현재 주행 상태에 맞춰 GPIO LED 갱신. main 루프에서 매 프레임 호출.
-    # def update_leds(self):
-    #     if self.parked:
-    #         # 주차 완료 → 전체 점멸 (park_action에서 이미 호출하지만 혹시 못 탄 경우 대비)
-    #         # mode_park_done은 내부에서 blink 스레드를 중복 시작하지 않도록 이미 guard됨
-    #         # 매 프레임 호출되므로 상태 변화 시에만 실행되게 플래그로 관리
-    #         if not getattr(self, '_led_state', None) == 'park':
-    #             self._led_state = 'park'
-    #             led.mode_park_done()
-
-    #     elif self.stop:
-    #         # 정지(횡단보도/신호등) → 빨강
-    #         if not getattr(self, '_led_state', None) == 'stop':
-    #             self._led_state = 'stop'
-    #             led.mode_stop()
-
-    #     elif self.doing_turn_right or self.turn_right:
-    #         # 우회전 표지판 인식 / 회전 중 → 오른쪽 노란 점멸
-    #         if not getattr(self, '_led_state', None) == 'right':
-    #             self._led_state = 'right'
-    #             led.mode_turn_right()
-
-    #     else:
-    #         # 일반 주행 → 초록
-    #         if not getattr(self, '_led_state', None) == 'straight':
-    #             self._led_state = 'straight'
-    #             led.mode_straight()
+    def update_leds(self):
+        GREEN = (0, 255, 0)
+        RED = (255, 0, 0)
+        YELLOW = (255, 255, 0)
+        OFF = (0, 0, 0)
+        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
+        if self.parked:
+            # 주차 완료 → 모든 LED 점멸
+            c = YELLOW if blink else OFF
+            led1 = led2 = c
+        elif self.stop:
+            # 정지 → 빨강
+            led1 = led2 = RED
+        elif self.doing_turn_right or self.turn_right:
+            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
+            led1 = OFF
+            led2 = YELLOW if blink else OFF
+        elif (
+            self.go_signal_time
+            and (time.time() - self.go_signal_time) < self.go_signal_duration
+        ):
+            # 직진 표지판 인식 → 양쪽 노란 점멸
+            led1 = led2 = YELLOW if blink else OFF
+        else:
+            # 주행 → 녹색
+            led1 = led2 = GREEN
+        self.publish_leds(led1, led2)
 
     def main(self):
         while self.is_running:
@@ -484,8 +526,12 @@ class SelfDrivingNode(Node):
                     continue
 
             result_image = image.copy()
-            # if self.start:
-            #     self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+            if self.start:
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+            else:
+                self.publish_leds(
+                    (255, 0, 0), (255, 0, 0)
+                )  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
@@ -527,8 +573,14 @@ class SelfDrivingNode(Node):
                 ) < self.red_hold_time  # 가까운 빨강 → 정지 트리거
                 # [수정] 정지 트리거: 횡단보도가 가깝거나(거리) OR 가까운 빨강을 봤을 때(규칙: 신호 인식시 우선 정지).
                 #   횡단보도 검출이 끊겨도 빨강이면 멈추게 함.
+                # [수정] 정지 래치(self.crosswalk_stopping): 일단 정지에 들어가면 거리(320) 근처에서
+                #   crosswalk_distance가 요동쳐도(예: 454→316→337) 정지가 풀리지 않게 함. 예전엔 316처럼
+                #   임계값 아래로 잠깐 떨어지면 정지가 한 프레임 풀려 차선추종이 로봇을 앞으로 밀어 '덜컥'거림.
+                #   정지는 stopped_enough(2초) 후 passed=True 될 때만 해제된다.
                 if (
-                    self.crosswalk_distance > self.crosswalk_stop_dist or red_close
+                    self.crosswalk_distance > self.crosswalk_stop_dist
+                    or red_close
+                    or self.crosswalk_stopping
                 ) and not self.crosswalk_passed:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
@@ -543,7 +595,7 @@ class SelfDrivingNode(Node):
                         )
                         self.crosswalk_stopping = False
                         self.stop = False
-                        # TODO
+                        # TODO : straight led
                         led.mode_straight()
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
                         #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
@@ -564,7 +616,7 @@ class SelfDrivingNode(Node):
                     ):  # 주차 동작 중이면 횡단보도 정지가 cmd_vel을 덮어쓰지 않게
                         self.stop = True  # 정지 유지
                         self.mecanum_pub.publish(Twist())
-                        # TODO
+                        # TODO : stop led
                         led.mode_stop()
                 else:
                     # 횡단보도에서 멀어지면(사라지면) 다음 횡단보도를 위해 상태 리셋
@@ -572,6 +624,19 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = False
                         self.crosswalk_stopping = False
                     self.stop = False
+
+                # [추가] 횡단보도 접근 감속: 검출됐고(거리≥approach_dist) 아직 통과/정지 전이면 미리 감속해
+                #   정지 명령 후 관성 오버슛을 줄인다. 특히 출발 직후 '바로 앞' 횡단보도는 늦게(가까이서)
+                #   검출돼 풀속(0.45)이면 지나치므로 접근 속도를 낮춘다. (정지지점 자체는 crosswalk_stop_dist 그대로)
+                #   [가드] not start_turn: 실제 코너 회전/복귀 중엔 감속 금지(고정 각속도라 감속하면 반경이
+                #   좁아져 과회전·불안정). 코너 직후 갑툭튀 횡단보도는 코너-복귀 감속(아래)이 이미 처리한다.
+                if (
+                    self.crosswalk_distance >= self.crosswalk_approach_dist
+                    and not self.crosswalk_passed
+                    and not self.crosswalk_stopping
+                    and not self.start_turn
+                ):
+                    twist.linear.x = min(twist.linear.x, self.crosswalk_approach_speed)
 
                 # [수정] 주차 표지판 검출 시 처리. 기존엔 crosswalk_distance에만 의존해
                 #   표지판을 멀리서 보기만 해도 주차했음 → 표지판 박스 면적(park_area=거리지표)으로 게이트.
@@ -581,7 +646,13 @@ class SelfDrivingNode(Node):
                         "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
                         % (self.park_x, self.park_area, self.park_min_area)
                     )
-                if 0 < self.park_x and self.park_area > self.park_min_area:
+                if (
+                    self.going_to_park
+                    and 0 < self.park_x
+                    and self.park_area > self.park_min_area
+                ):
+                    # [수정] going_to_park(우회전 이후)일 때만 주차. 출발 지점에서 park 표지판이 보여도
+                    #   주차/접근 모드에 안 들어가게(다른 팀이 신호등을 치워 출발선에서 park가 보이던 문제).
                     # 표지판에 충분히 가까움 → 감속하며 주차 준비
                     twist.linear.x = self.slow_down_speed
                     if (
@@ -608,7 +679,7 @@ class SelfDrivingNode(Node):
                     if self.count_park > 0:
                         self.count_park -= 1
 
-                # line following processing
+                # -------------------line following processing----------------------------
                 # [핵심수정] 회전/보정 판단을 '가까운 ROI 기준'(near)으로 변경.
                 #   기존 lane_x는 max_center_x(=far)로, 먼 ROI가 앞쪽 코너를 미리 봐서 회전이 너무 일찍 트리거됐음.
                 #   → lane_x 에 near 값을 받아 이후 로직(회전 threshold, PID)은 그대로 두고 판단 기준만 바꿈.
@@ -618,12 +689,26 @@ class SelfDrivingNode(Node):
                 )
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
-                if (
-                    not self.start_park
-                    and (self.going_to_park or self.park_x > 0)
-                    and not self.stop
-                ):
-                    # [추가] 우회전 후(going_to_park) 또는 주차 표지판이 보일 때(park_x>0)는 '우측 라인'을 PID로 추종.
+                # [진단 로그] 코너 회전 중 멈춤 추적용. 매 프레임 출력(어느 블록이 실행되든).
+                #   start_turn=코너 급회전 확정 상태, lane_x(near)=회전 판단값, far=먼 ROI, thr=회전 임계값,
+                #   stop=정지플래그(참이면 아래 차선/코너 블록이 통째로 스킵됨), doing=표지판 우회전 동작 중,
+                #   go2park=주차경로 모드, start_park=주차동작 중.
+                self.get_logger().info(
+                    "\033[1;35mTURN? start_turn=%s lane_x=%d far=%d thr=%d stop=%s doing=%s go2park=%s start_park=%s\033[0m"
+                    % (
+                        self.start_turn,
+                        lane_x,
+                        lane_x_far,
+                        self.turn_threshold,
+                        self.stop,
+                        self.doing_turn_right,
+                        self.going_to_park,
+                        self.start_park,
+                    )
+                )
+                if not self.start_park and self.going_to_park and not self.stop:
+                    # [수정] '우회전 이후(going_to_park)'에만 우측 라인 접근 모드. (park_x>0 조건 제거 —
+                    #   출발선에서 park 표지판이 보이면 오작동하던 문제). '우측 라인'을 PID로 추종.
                     #   [중요] not self.start_park 가드: 주차 동작 시작 후엔 main 루프가 cmd_vel을 발행하면
                     #   park_action 스레드의 횡이동을 덮어써서 주차가 안 됨(직진해 표지판 지나침). 그래서 양보.
                     #   좌측엔 중앙 교차로 갈림길이 있어 기존(좌측) 차선추종은 좌측 길로 이탈했음.
@@ -642,14 +727,20 @@ class SelfDrivingNode(Node):
                         self.slow_down_speed if self.park_x > 0 else self.normal_speed
                     )
                     if right_x >= 0:
-                        self.pid.SetPoint = self.park_lane_setpoint
-                        self.pid.update(right_x)
+                        # [②] 전용 PID(pid_park)로 우측라인 추종 — 회전 직후 파고듦을 단단히 복구.
+                        #   클램프도 park_angular_limit(0.4)로 넓혀 회복 각속도 확보(직진용 0.25보다 큼).
+                        self.pid_park.SetPoint = self.park_lane_setpoint
+                        self.pid_park.update(right_x)
                         twist.angular.z = common.set_range(
-                            self.pid.output, -self.angular_z_limit, self.angular_z_limit
+                            self.pid_park.output,
+                            -self.park_angular_limit,
+                            self.park_angular_limit,
                         )
                     else:
-                        self.pid.clear()
+                        self.pid_park.clear()
                         twist.angular.z = 0.0  # 우측 라인 미검출 시 직진 유지
+                    # TODO : straight led(주차 직전)
+                    led.mode_straight()
                     self.mecanum_pub.publish(twist)
                 elif (
                     not self.start_park
@@ -669,8 +760,11 @@ class SelfDrivingNode(Node):
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
                         if self.machine_type != "MentorPi_Acker":
-                            twist.angular.z = self.turn_angular_z
-                            # [튜닝] 고정 회전 각속도 (param_init의 turn_angular_z)
+                            twist.angular.z = (
+                                self.turn_angular_z
+                            )  # [튜닝] 고정 회전 각속도 (param_init의 turn_angular_z)
+                            # TODO : right led
+                            led.mode_turn_right()
                         else:
                             twist.angular.z = twist.linear.x * math.tan(-0.5061) / 0.145
                     else:  # use PID algorithm to correct turns on a straight road
@@ -690,7 +784,10 @@ class SelfDrivingNode(Node):
                             if abs(lane_x - self.lane_setpoint) < self.lane_deadband:
                                 self.pid.clear()  # PID 내부 상태 초기화로 데드밴드 이탈 시 튐 방지
                                 twist.angular.z = 0.0
+                                # TODO : straight led(주차 직전)
                                 led.mode_straight()
+                                self.mecanum_pub.publish(twist)
+
                             else:
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
@@ -699,6 +796,9 @@ class SelfDrivingNode(Node):
                                         -self.angular_z_limit,
                                         self.angular_z_limit,
                                     )  # [튜닝] 출력 제한 (param_init의 angular_z_limit)
+                                    # TODO : straight led(주차 직전)
+                                    led.mode_straight()
+                                    self.mecanum_pub.publish(twist)
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
@@ -714,6 +814,16 @@ class SelfDrivingNode(Node):
                         else:
                             if self.machine_type == "MentorPi_Acker":
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
+                    # [수정] 회전 '직후 복귀' 구간에서만 감속(코너 직후 갑툭튀 횡단보도 대비).
+                    #   실제 급회전 중(lane_x>threshold)엔 감속 안 함 — 감속하면 반경이 좁아져 과회전/불안정.
+                    if self.start_turn and lane_x <= self.turn_threshold:
+                        twist.linear.x = self.corner_speed
+                    # [진단 로그] 차선추종/코너 블록이 실제로 로봇에 내보내는 속도. 코너 중 lin이 0으로
+                    #   떨어지거나 ang이 안 나가면 여기서 잡힘. (이 로그가 안 찍히면 stop 때문에 블록이 스킵된 것)
+                    self.get_logger().info(
+                        "\033[1;32mDRIVE lin=%.2f ang=%.2f (start_turn=%s lane_x=%d)\033[0m"
+                        % (twist.linear.x, twist.angular.z, self.start_turn, lane_x)
+                    )
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
