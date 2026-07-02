@@ -688,7 +688,7 @@ class SelfDrivingNode(Node):
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
                     if (
-                        turn_elapsed > 0.48
+                        turn_elapsed > 0.38
                         and len(center_x) >= 4
                         and center_x[3] != -1
                         and center_x[3] < 180
