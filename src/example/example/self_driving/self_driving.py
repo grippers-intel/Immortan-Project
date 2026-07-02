@@ -326,6 +326,7 @@ class SelfDrivingNode(Node):
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
+        led.all_off()
 
     def get_node_state(self, request, response):
         response.success = True
