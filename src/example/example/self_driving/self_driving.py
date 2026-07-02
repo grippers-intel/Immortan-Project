@@ -172,6 +172,9 @@ class SelfDrivingNode(Node):
         self.go_signal_time = 0          # 직진 표지판 마지막 인식 시각
         self.go_signal_duration = 3.0    # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
         self.last_led_state = None       # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
+        self.led_update_interval = 0.1   # LED 갱신 빈도 제한(초). 너무 자주 갱신하면 제어 루프 부담이 커짐.
+        self.last_led_update_time = 0.0  # 마지막 LED 갱신 시각
+        self.current_led_mode = None     # 현재 LED 모드(상태 변화 시에만 실제 GPIO 갱신)
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
@@ -485,37 +488,30 @@ class SelfDrivingNode(Node):
     # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
     #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
     def update_leds(self):
-        # GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
-        # blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
-        # if self.parked:
-        #     # 주차 완료 → 모든 LED 점멸
-        #     c = YELLOW if blink else OFF
-        #     led1 = led2 = c
-        # elif self.stop:
-        #     # 정지 → 빨강
-        #     led1 = led2 = RED
-        # elif self.doing_turn_right or self.turn_right:
-        #     # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-        #     led1 = OFF
-        #     led2 = YELLOW if blink else OFF
-        # elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
-        #     # 직진 표지판 인식 → 양쪽 노란 점멸
-        #     led1 = led2 = YELLOW if blink else OFF
-        # else:
-        #     # 주행 → 녹색
-        #     led1 = led2 = GREEN
-        # self.publish_leds(led1, led2)
-        
+        now = time.time()
+        if now - self.last_led_update_time < self.led_update_interval and self.current_led_mode is not None:
+            return
+        self.last_led_update_time = now
 
         if self.parked:
-            led.mode_park_done()
-
+            desired_mode = 'park_done'
         elif self.stop:
-            led.mode_stop()
-
+            desired_mode = 'stop'
         elif self.turn_right or self.doing_turn_right:
-            led.mode_turn_right()
+            desired_mode = 'turn_right'
+        else:
+            desired_mode = 'straight'
 
+        if self.current_led_mode == desired_mode:
+            return
+
+        self.current_led_mode = desired_mode
+        if desired_mode == 'park_done':
+            led.mode_park_done()
+        elif desired_mode == 'stop':
+            led.mode_stop()
+        elif desired_mode == 'turn_right':
+            led.mode_turn_right()
         else:
             led.mode_straight()
 
@@ -532,7 +528,7 @@ class SelfDrivingNode(Node):
 
             result_image = image.copy()
             if self.start:
-                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
+                self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(상태 변화/간격 제한)
             else:
                 self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
