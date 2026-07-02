@@ -223,6 +223,15 @@ class SelfDrivingNode(Node):
         # 400으로 낮추고, 확정 카운트도 5->2로 낮춰 이 좁은 창 안에서 트리거될 수 있게 함.
         self.right_min_area = 400
         self.right_confirm_count = 2
+        # [9차 실차 테스트, docs/test6_log.txt 분석] 우회전이 너무 멀리서(작은 area) 조기
+        # 확정된 사례의 원인: count_right는 미검출 시 리셋되는 로직이 없어(count_park/
+        # count_crosswalk와 다름) area 미달로 실패한 프레임이 아무리 많아도 이전에 쌓인
+        # 값이 계속 누적됨. 실제로 경주 시작 직후(60초 이상 전) 스쳐 지나간 첫 검출 1회가
+        # 그대로 남아있다가, 훨씬 뒤(코너 근처) 표지판이 아직 멀어서 확신이 낮은 순간에
+        # 마침 area가 한 번만 넘어도 곧바로 confirm_count(2)를 채워 조기 확정됐음.
+        # 마지막 검출 후 이 시간(초)이 지나면 오래된 카운트를 버리고 새로 세도록 함.
+        self.right_last_seen_time = 0
+        self.right_decay_time = 1.5
         self.turn_right_set_time = (
             0  # turn_right가 True로 확정된 시각(아래 timeout 판단용)
         )
@@ -292,7 +301,14 @@ class SelfDrivingNode(Node):
         #    첫 실차 테스트에서 코너 중 반대쪽으로 밀리면 이 값만 -1로 바꾸면 됨)
         self.turn_right_strafe_sign = 1
         # Mecanum이 아닌 모델(MentorPi_Acker 등)은 옆으로 못 움직이므로 이 보정을 끔
-        self.turn_right_use_strafe_pid = self.machine_type == "MentorPi_Mecanum"
+        # [9차 실차 테스트] 회전각이 계속 과하게 커지는 문제(3.3→3.0→2.6으로 duration을
+        # 낮춰도 해결 안 됨)에 대해, 사용자가 "기존 차량(스트레이프 없는 단순 회전)과
+        # 같은 방식으로 하자"고 요청. 이 좌우 스트레이프 보정은 처음부터 strafe_sign(+1)이
+        # 실차에서 맞는 방향인지 검증된 적이 없었고(주석에도 "반대로 나오면 -1로 뒤집을
+        # 것"이라고만 되어 있었음), 잘못된 방향/과도한 보정이 회전 궤적을 옆으로 밀어
+        # 실제 회전각이 커 보이는 원인이었을 가능성이 있음. 검증되지 않은 보정을 계속
+        # 얹어 튜닝하기보다, 순수 전진(x)+회전(z)만 쓰는 단순 개방루프 회전으로 되돌림.
+        self.turn_right_use_strafe_pid = False
 
         self.last_park_detect = False
         self.count_park = 0
@@ -315,12 +331,16 @@ class SelfDrivingNode(Node):
         #   [6차 실차 테스트] 이번엔 반대로 "너무 일찍 멈춘다"는 피드백 -> 260→290으로
         #   살짝 다시 올림(320과 260의 중간). 그래도 이르면 좀 더 ↑, 다시 못 멈추면 ↓
         self.crosswalk_min_area = (
-            1400  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
+            1800  # 횡단보도 박스 면적이 이 값 이상일 때만 인정. 바닥 허연 부분(≈1200)은
         )
         #   [4차 실차 테스트] "더 널널한 거리에서부터 탐지" 요청으로 1800→1400 완화.
         #   바닥 허연 부분(≈1200)과의 여유가 줄었지만 aspect(≥2.0)/score(≥0.25) 필터가
         #   추가로 걸러주는 것을 기대. 오검출 다시 늘면 ↑, 여전히 늦게 잡히면 더 ↓
         #   여전히 걸러짐. (2200→1800: 더 멀리서 미리 잡아 정지 여유 확보. 오검출 생기면 ↑)
+        #   [9차 실차 테스트 이후] "작은 횡단보도(오검출)를 인식하는 경우가 있다"는
+        #   피드백으로 1400→1800(4차 이전 값)으로 다시 올림. 지금은 탐지 자체는 이미
+        #   잘 되고 있어(9차 "성능 좋아졌다") 여유를 좀 더 둬도 되는 상황. 여전히 작은
+        #   오검출이 걸리면 더 ↑, 반대로 진짜 횡단보도를 놓치면 다시 ↓
         self.crosswalk_min_aspect = (
             2.0  # [종횡비 필터] 박스 가로/세로 비가 이 값 이상일 때만 인정.
         )
@@ -1142,6 +1162,12 @@ class SelfDrivingNode(Node):
                         f"(min={self.right_min_area}) count_right={self.count_right + 1}"
                     )
                     if area >= self.right_min_area:
+                        now = time.time()
+                        # [9차 실차 테스트] 마지막 검출로부터 너무 오래 지났으면(예: 경주
+                        # 시작 직후 스쳐 지나간 오검출 잔재) 이전 카운트를 버리고 새로 셈
+                        if now - self.right_last_seen_time > self.right_decay_time:
+                            self.count_right = 0
+                        self.right_last_seen_time = now
                         self.count_right += 1
                         self.count_right_miss = 0
                         if (
