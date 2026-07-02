@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+# encoding: utf-8
+# @data:2023/03/28
+# @author:aiden
+# autonomous driving
 import os
 import cv2
 import math
@@ -184,7 +189,10 @@ class SelfDrivingNode(Node):
             2.0  # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         )
         self.park_capture_frames = 3  # 이만큼 연속 유효하면 캡처(정지+이동 시작)
-        self.park_standoff_fwd = 0.10  # 전진 이동 = fwd - 이 값. (로봇이 표지판 세로위치에서 얼마 앞에 설지) 넘으면 ↑
+        self.park_standoff_fwd = (
+            0.5  # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
+        )
+        #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
         self.park_standoff_right = (
             0.15  # 우측 이동 = right + 이 값. (표지판 지나 주차칸 안으로) 덜 들어가면 ↑
         )
@@ -252,9 +260,8 @@ class SelfDrivingNode(Node):
             0.9  # 우회전 '전' 똑바로 직진하는 시간(초). 너무 일찍 꺾이면 ↑
         )
         #   (0.8→1.1→0.9: 늦게 진입해 왼쪽 앞바퀴가 라인 밟음 → 조금 일찍 회전)
-        # NOTE
         self.turn_right_duration = (
-            3.6  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
+            3.3  # 우회전 동작 시간(초). 덜 돌면 ↑, 과하게 돌면 ↓ (90도 맞춰 튜닝)
         )
         #   (3.0→3.2→3.5→3.3: [②] 살짝 덜 돌려 '오른쪽 파고듦' 방지. 회전 후
         #    going_to_park 우측라인 PID가 마무리로 당겨옴. 못 돌면 ↑, 파고들면 ↓)
@@ -299,8 +306,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
 
         self.start_slow_down = False  # slowing down sign
-        # NOTE
-        self.normal_speed = 0.35  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
+        self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
         self.corner_speed = 0.25  # 코너 직후 복귀 동안 속도(순항보다 ↓). 코너 직후 갑툭튀 횡단보도를 제때 멈추려고 (0.3→0.25)
         self.slow_down_speed = 0.1  # slowing down speed
 
@@ -351,11 +357,10 @@ class SelfDrivingNode(Node):
         self.red_close_time = 0  # 가까운 빨강 마지막 검출 시각
         self.red_min_area = 800  # 빨강 박스가 이 면적 이상이면 '가까운 빨강'으로 보고 정지 트리거 (로그 보고 튜닝)
 
-        self.led_update_interval = 0.1
-
         self.object_sub = None
         self.image_sub = None
         self.objects_info = []
+        self.led_update_interval = 0.1
 
     def get_node_state(self, request, response):
         response.success = True
