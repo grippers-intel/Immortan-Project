@@ -454,10 +454,10 @@ class SelfDrivingNode(Node):
             else:
                 gone = 0
             time.sleep(0.03)
-        self.get_logger().info(
-            "\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m"
-            % (time.time() - t0, self.crosswalk_distance)
-        )
+        # self.get_logger().info(
+        #     "\033[1;41mTURN RIGHT: forward done in %.2fs (cw=%d) -> rotating\033[0m"
+        #     % (time.time() - t0, self.crosswalk_distance)
+        # )
         # 2단계: 전진하며 우회전
         # TODO : right led
         led.mode_turn_right()
@@ -475,9 +475,9 @@ class SelfDrivingNode(Node):
         if state == self.last_led_state:
             return
         self.last_led_state = state
-        self.get_logger().info(
-            "\033[1;32mLED L=%s R=%s\033[0m" % (c1, c2)
-        )  # [진단] LED 색 바뀔 때만
+        # self.get_logger().info(
+        #     "\033[1;32mLED L=%s R=%s\033[0m" % (c1, c2)
+        # )  # [진단] LED 색 바뀔 때만
         msg = RGBStates()
         msg.states = [
             RGBState(index=1, red=int(c1[0]), green=int(c1[1]), blue=int(c1[2])),
@@ -546,21 +546,21 @@ class SelfDrivingNode(Node):
 
                 # 횡단보도 정지 처리 (규칙: 횡단보도 앞 반드시 정지 후 출발, 신호등 빨강이면 계속 정지)
                 # [디버그 로그] crosswalk=거리, stopping=정지중, passed=통과처리됨, sign=신호등상태
-                self.get_logger().info(
-                    "\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s turn_right=%s doing=%s\033[0m"
-                    % (
-                        self.crosswalk_distance,
-                        self.crosswalk_stopping,
-                        self.crosswalk_passed,
-                        (
-                            self.traffic_signs_status.class_name
-                            if self.traffic_signs_status is not None
-                            else "none"
-                        ),
-                        self.turn_right,
-                        self.doing_turn_right,
-                    )
-                )
+                # self.get_logger().info(
+                #     "\033[1;33mcrosswalk=%d stopping=%s passed=%s sign=%s turn_right=%s doing=%s\033[0m"
+                #     % (
+                #         self.crosswalk_distance,
+                #         self.crosswalk_stopping,
+                #         self.crosswalk_passed,
+                #         (
+                #             self.traffic_signs_status.class_name
+                #             if self.traffic_signs_status is not None
+                #             else "none"
+                #         ),
+                #         self.turn_right,
+                #         self.doing_turn_right,
+                #     )
+                # )
 
                 twist.linear.x = self.normal_speed  # 기본 직진 속도
 
@@ -643,10 +643,11 @@ class SelfDrivingNode(Node):
                 #   표지판을 멀리서 보기만 해도 주차했음 → 표지판 박스 면적(park_area=거리지표)으로 게이트.
                 # [디버그 로그] 주차 표지판 보일 때 면적 출력 → park_min_area 튜닝용.
                 if 0 < self.park_x:
-                    self.get_logger().info(
-                        "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
-                        % (self.park_x, self.park_area, self.park_min_area)
-                    )
+                    # self.get_logger().info(
+                    #     "\033[1;35mpark_x=%d park_area=%d (min=%d)\033[0m"
+                    #     % (self.park_x, self.park_area, self.park_min_area)
+                    # )
+                    pass
                 if (
                     self.going_to_park
                     and 0 < self.park_x
@@ -661,10 +662,10 @@ class SelfDrivingNode(Node):
                     ):  # 주차 시작 (표지판이 가까워 면적 임계 통과)
                         self.count_park += 1
                         # [진단 로그] 카운트 진행상황 확인 → 8에 도달하는지 보기
-                        self.get_logger().info(
-                            "\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m"
-                            % (self.count_park, self.park_area)
-                        )
+                        # self.get_logger().info(
+                        #     "\033[1;41mPARK COUNT=%d/8 (area=%d>min)\033[0m"
+                        #     % (self.count_park, self.park_area)
+                        # )
                         if self.count_park >= 8:  # 8프레임 이상 가까우면 주차 시작
                             self.get_logger().info(
                                 "\033[1;41m=== PARK START ===\033[0m"
@@ -694,19 +695,19 @@ class SelfDrivingNode(Node):
                 #   start_turn=코너 급회전 확정 상태, lane_x(near)=회전 판단값, far=먼 ROI, thr=회전 임계값,
                 #   stop=정지플래그(참이면 아래 차선/코너 블록이 통째로 스킵됨), doing=표지판 우회전 동작 중,
                 #   go2park=주차경로 모드, start_park=주차동작 중.
-                self.get_logger().info(
-                    "\033[1;35mTURN? start_turn=%s lane_x=%d far=%d thr=%d stop=%s doing=%s go2park=%s start_park=%s\033[0m"
-                    % (
-                        self.start_turn,
-                        lane_x,
-                        lane_x_far,
-                        self.turn_threshold,
-                        self.stop,
-                        self.doing_turn_right,
-                        self.going_to_park,
-                        self.start_park,
-                    )
-                )
+                # self.get_logger().info(
+                #     "\033[1;35mTURN? start_turn=%s lane_x=%d far=%d thr=%d stop=%s doing=%s go2park=%s start_park=%s\033[0m"
+                #     % (
+                #         self.start_turn,
+                #         lane_x,
+                #         lane_x_far,
+                #         self.turn_threshold,
+                #         self.stop,
+                #         self.doing_turn_right,
+                #         self.going_to_park,
+                #         self.start_park,
+                #     )
+                # )
                 if not self.start_park and self.going_to_park and not self.stop:
                     # [수정] '우회전 이후(going_to_park)'에만 우측 라인 접근 모드. (park_x>0 조건 제거 —
                     #   출발선에서 park 표지판이 보이면 오작동하던 문제). '우측 라인'을 PID로 추종.
@@ -719,10 +720,10 @@ class SelfDrivingNode(Node):
                     _, _, _, right_x = self.lane_detect_right(
                         binary_image, result_image
                     )
-                    self.get_logger().info(
-                        "\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m"
-                        % (right_x, self.park_lane_setpoint)
-                    )
+                    # self.get_logger().info(
+                    #     "\033[1;34mgoing_to_park right_x=%d (setpoint=%d)\033[0m"
+                    #     % (right_x, self.park_lane_setpoint)
+                    # )
                     # 주차 표지판이 보이면(park_x>0) 감속해 정밀 접근(지나침 방지). 아직 안 보이면 복도를 순항속도로.
                     twist.linear.x = (
                         self.slow_down_speed if self.park_x > 0 else self.normal_speed
@@ -821,10 +822,10 @@ class SelfDrivingNode(Node):
                         twist.linear.x = self.corner_speed
                     # [진단 로그] 차선추종/코너 블록이 실제로 로봇에 내보내는 속도. 코너 중 lin이 0으로
                     #   떨어지거나 ang이 안 나가면 여기서 잡힘. (이 로그가 안 찍히면 stop 때문에 블록이 스킵된 것)
-                    self.get_logger().info(
-                        "\033[1;32mDRIVE lin=%.2f ang=%.2f (start_turn=%s lane_x=%d)\033[0m"
-                        % (twist.linear.x, twist.angular.z, self.start_turn, lane_x)
-                    )
+                    # self.get_logger().info(
+                    #     "\033[1;32mDRIVE lin=%.2f ang=%.2f (start_turn=%s lane_x=%d)\033[0m"
+                    #     % (twist.linear.x, twist.angular.z, self.start_turn, lane_x)
+                    # )
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
@@ -881,10 +882,10 @@ class SelfDrivingNode(Node):
                     # [수정] 바닥 허연 자국을 횡단보도로 오검출(한프레임씩)하는 것 방지.
                     #   박스 면적이 crosswalk_min_area 이상인 '충분히 큰' 검출만 인정.
                     cw_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
-                    self.get_logger().info(
-                        "\033[1;36mcrosswalk area=%d (min=%d)\033[0m"
-                        % (cw_area, self.crosswalk_min_area)
-                    )
+                    # self.get_logger().info(
+                    #     "\033[1;36mcrosswalk area=%d (min=%d)\033[0m"
+                    #     % (cw_area, self.crosswalk_min_area)
+                    # )
                     if (
                         cw_area >= self.crosswalk_min_area and center[1] > min_distance
                     ):  # Obtain recent y-axis pixel coordinate of the crosswalk
@@ -900,10 +901,10 @@ class SelfDrivingNode(Node):
                     # [수정] 표지판이 '충분히 가까울 때'(박스 큼)만 카운트 → 멀리서 일찍 turn_right가 켜져
                     #   엉뚱한 앞 코너에서 깜빡이가 켜지거나 일반 코너링이 우회전을 가로채던 문제 방지.
                     right_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
-                    self.get_logger().info(
-                        "\033[1;31mright sign area=%d (min=%d) count=%d\033[0m"
-                        % (right_area, self.right_min_area, self.count_right)
-                    )
+                    # self.get_logger().info(
+                    #     "\033[1;31mright sign area=%d (min=%d) count=%d\033[0m"
+                    #     % (right_area, self.right_min_area, self.count_right)
+                    # )
                     # [수정] 우회전 이후(going_to_park)·주차 중엔 turn_right 재무장 금지(주차장서 두 번째 우회전 방지).
                     if (
                         right_area >= self.right_min_area
@@ -936,16 +937,16 @@ class SelfDrivingNode(Node):
                             time.time()
                         )  # [신호등] 빨강 신선도 갱신(모든 빨강 → 출발 막기)
                         red_area = (i.box[2] - i.box[0]) * (i.box[3] - i.box[1])
-                        self.get_logger().info(
-                            "\033[1;31mred area=%d (min=%d)\033[0m"
-                            % (red_area, self.red_min_area)
-                        )
+                        # self.get_logger().info(
+                        #     "\033[1;31mred area=%d (min=%d)\033[0m"
+                        #     % (red_area, self.red_min_area)
+                        # )
                         if (
                             red_area >= self.red_min_area
                         ):  # 가까운 빨강 → 정지 트리거 갱신
                             self.red_close_time = time.time()
 
-            self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
+            # self.get_logger().info("\033[1;32m%s\033[0m" % class_name)
             self.crosswalk_distance = min_distance
 
 
