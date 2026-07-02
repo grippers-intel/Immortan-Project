@@ -490,7 +490,7 @@ class SelfDrivingNode(Node):
                     if self.pre_slow_down:  # 홀수 횡단보도: 기존 정지 로직 유지
                         if (
                             self.crosswalk_box_height > 15
-                        ):  # 30→60→50→20→15: 임계값 낮춰 감지 즉시(2프레임≈0.2s) 정지, 이동 거리 최소화
+                        ):  # 30→60→50→20→15→12→15: 15가 적당한 정지 위치
                             self.count_crosswalk += 1
                             if self.count_crosswalk >= 2:
                                 self.count_crosswalk = 0
@@ -659,7 +659,7 @@ class SelfDrivingNode(Node):
                         self.pid.clear()
                     else:  # use PID algorithm to correct turns on a straight road
                         if not self.start_turn:
-                            self.pid.SetPoint = 230  # TODO 도로 중앙값 조절 (245->230->250->230: 250+클램프0.18 동시변경으로 과보정, 일단 원복)
+                            self.pid.SetPoint = 240  # TODO 도로 중앙값 조절 (245->230->250->230->240: 클램프 0.13 고정, SetPoint만 단계적 조정)
                             if (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
@@ -674,8 +674,8 @@ class SelfDrivingNode(Node):
                                 self.pid.update(lane_x)
                                 if self.machine_type != "MentorPi_Acker":
                                     twist.angular.z = common.set_range(
-                                        self.pid.output, -0.13, 0.13
-                                    )  # TODO : 0.18->0.13->0.18->0.13 복원, SetPoint+클램프 동시변경으로 과보정 → 클램프만 원복
+                                        self.pid.output, -0.15, 0.15
+                                    )  # TODO : 0.18->0.13->0.18->0.13->0.15, SetPoint=240 + 클램프=0.15 (4cm 왼쪽 보정용)
                                 else:
                                     twist.angular.z = (
                                         twist.linear.x
@@ -692,11 +692,11 @@ class SelfDrivingNode(Node):
                     if (
                         self.pre_slow_down
                         and not self.start_turn
-                        and self.crosswalk_box_height > 12
+                        and self.crosswalk_box_height > 13
                     ):
                         twist.linear.x = (
                             self.slow_down_speed
-                        )  # cw_h>12일 때만 감속: 멀리서 감지해도 가까워질 때까지 전속력 유지, 정지 직전만 감속
+                        )  # cw_h>13일 때 감속: 정지(15) 직전만 감속, 너무 이른 감속 방지 (10→13)
                     if self.accel_ramp_active and not self.start_turn:
                         elapsed = time.time() - self.accel_ramp_start_time
                         if elapsed >= 0.15:
