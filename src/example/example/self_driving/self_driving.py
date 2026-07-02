@@ -125,8 +125,12 @@ class SelfDrivingNode(Node):
         self.park_area = 0       # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
         self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
                                    #   (실측 로그 기반으로 1200 설정)
-        self.park_forward_time = 1.0  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록
+        self.park_forward_time = 0.8  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
+                                      #   (1.0→0.8: 주차가 너무 멀리 가서 멈춰 전진거리 축소. 더 멀면 ↓, 덜 가면 ↑)
         self.park_forward_speed = 0.3  # 주차 전 직진 속도(순항속도와 분리!). 예전 0.3에서 잘 됐던 거리(0.3m). 라인 넘으면 ↓
+        # 주차칸으로 옆으로 들어가는(메카넘 횡이동) 거리·속도. 이동거리 = dist(m).
+        self.park_lateral_speed = 0.2  # 횡이동 속도(m/s)
+        self.park_lateral_dist = 0.32  # 횡이동 거리(m). (0.38→0.32: 오른쪽으로 너무 깊이 들어가 축소. 더 깊으면 ↓, 덜 들어가면 ↑)
         self.going_to_park = False  # 우회전 완료 후 주차장까지 가는 중. 이 동안은 '우측 라인' 추종(좌측 갈림길 이탈 방지)
         self.park_lane_setpoint = 190  # 우측 라인 추종 목표 x(우측 절반 0~320 좌표). 로그(right_x) 보고 튜닝. 우측 라인을 이 값에 맞춰 유지
         self.park_angular_limit = 0.4  # [②] 우회전 후 우측라인 복구 각속도 제한(직진용 0.25보다 큼). 파고듦 복구 힘. 너무 휘청이면 ↓
@@ -326,9 +330,9 @@ class SelfDrivingNode(Node):
             time.sleep(self.park_forward_time)
             # 옆으로 이동(메카넘 횡이동)하여 주차칸에 진입
             twist = Twist()
-            twist.linear.y = -0.2
+            twist.linear.y = -self.park_lateral_speed
             self.mecanum_pub.publish(twist)
-            time.sleep(0.38/0.2)
+            time.sleep(self.park_lateral_dist / self.park_lateral_speed)
         
         # 안 쓰는 모델
         elif self.machine_type == 'MentorPi_Acker':
