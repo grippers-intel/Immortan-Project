@@ -13,7 +13,6 @@ import threading
 import numpy as np
 import sdk.pid as pid
 import sdk.fps as fps
-import sdk.led as led   # [빵판 LED] GPIO 4핀(녹/빨/좌노랑/우노랑) 제어. mode_* 논블로킹(스레드 점멸)+set_mode 가드 내장.
 from rclpy.node import Node
 import sdk.common as common
 # from app.common import Heart
@@ -144,9 +143,7 @@ class SelfDrivingNode(Node):
         self.park_right_m = 0.0     # 최근 프레임 표지판 옆거리(m, +=우측)
         # [방법1 - 2단계] 뎁스로 표지판 (fwd, right) 미터를 얻어 메카넘+오도메트리로 정위치 이동.
         self.depth_park_enabled = True  # True=뎁스 주차, False=기존 area/park_x arm-fire로 폴백
-        self.park_capture_dist = 1.5    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처. (2.0→1.5: 멀리서 캡처하면
-                                        #   전진량이 1.06~1.49로 들쭉날쭉→지나침. 1.5m까지 접근 후 캡처해 전진량 ~1.0로 일관
-                                        #   (정확했던 판=capture1.56/move1.06). 표지판이 그 전에 화면 밖으로 나가 캡처 실패하면 ↑)
+        self.park_capture_dist = 2.0    # 표지판이 이 거리(m) 이내로 유효 검출되면 캡처 후보
         self.park_capture_frames = 3    # 이만큼 연속 유효하면 캡처(정지+이동 시작)
         self.park_standoff_fwd = 0.5    # 전진 이동 = fwd - 이 값. (0.1→0.5: 표지판 바로 앞까지 가서 주차칸을
                                         #   넘어감 → 덜 전진. 주차칸=표지판보다 앞+카메라가 로봇 앞쪽. 넘으면 ↑, 못 미치면 ↓)
@@ -195,11 +192,7 @@ class SelfDrivingNode(Node):
         self.count_go = 0
         self.go_signal_time = 0          # 직진 표지판 마지막 인식 시각
         self.go_signal_duration = 3.0    # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
-        self.last_led_state = None       # (온보드 RGB용) 마지막 발행 색
-        # [빵판 LED] 스로틀+상태가드용. (팀원 파일엔 초기화 누락돼 있어 여기서 초기화)
-        self.current_led_mode = None     # 마지막으로 빵판에 적용한 모드
-        self.last_led_update_time = 0.0  # 마지막 update_leds 실행 시각
-        self.led_update_interval = 0.2   # 이 간격(초)마다만 상태 재평가(호출 최소화)
+        self.last_led_state = None       # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
 
         # [우회전 동작] 우회전 표지판 인식(turn_right) 후 횡단보도 정지 → 우회전 수행.
         self.doing_turn_right = False    # 우회전 동작 수행 중(이 동안 차선추종은 제어 양보)
@@ -580,36 +573,29 @@ class SelfDrivingNode(Node):
         ]
         self.rgb_pub.publish(msg)
 
-    # [빵판 LED] 현재 주행 상태에 맞춰 빵판 LED 갱신. main 루프에서 매 프레임 호출.
-    #   규칙: 주행=녹색 / 정지=빨강 / 우회전=우측노랑점멸 / 주차완료=전체점멸.
-    #   led.mode_*는 논블로킹(점멸=데몬스레드)+set_mode 내부 가드라 매 프레임 불러도 안전하지만,
-    #   여기서도 시간 스로틀 + 상태변화 가드로 호출을 최소화(루프 부하 0에 수렴).
+    # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
+    #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
     def update_leds(self):
-        now = time.time()
-        if now - self.last_led_update_time < self.led_update_interval and self.current_led_mode is not None:
-            return
-        self.last_led_update_time = now
-
+        GREEN = (0, 255, 0); RED = (255, 0, 0); YELLOW = (255, 255, 0); OFF = (0, 0, 0)
+        blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
         if self.parked:
-            desired_mode = 'park_done'
+            # 주차 완료 → 모든 LED 점멸
+            c = YELLOW if blink else OFF
+            led1 = led2 = c
         elif self.stop:
-            desired_mode = 'stop'
-        elif self.turn_right or self.doing_turn_right:
-            desired_mode = 'turn_right'
+            # 정지 → 빨강
+            led1 = led2 = RED
+        elif self.doing_turn_right or self.turn_right:
+            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
+            led1 = OFF
+            led2 = YELLOW if blink else OFF
+        elif self.go_signal_time and (time.time() - self.go_signal_time) < self.go_signal_duration:
+            # 직진 표지판 인식 → 양쪽 노란 점멸
+            led1 = led2 = YELLOW if blink else OFF
         else:
-            desired_mode = 'straight'
-
-        if self.current_led_mode == desired_mode:
-            return
-        self.current_led_mode = desired_mode
-        if desired_mode == 'park_done':
-            led.mode_park_done()
-        elif desired_mode == 'stop':
-            led.mode_stop()
-        elif desired_mode == 'turn_right':
-            led.mode_turn_right()
-        else:
-            led.mode_straight()
+            # 주행 → 녹색
+            led1 = led2 = GREEN
+        self.publish_leds(led1, led2)
 
     def main(self):
         while self.is_running:
@@ -626,11 +612,7 @@ class SelfDrivingNode(Node):
             if self.start:
                 self.update_leds()  # [LED] 주행 상태에 맞춰 LED 갱신(매 프레임)
             else:
-                self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강(온보드)
-                # [빵판 LED] 대기 중에도 빵판은 빨강(정지) 표시. set_mode 가드로 실제 GPIO는 1회만.
-                if self.current_led_mode != 'stop':
-                    self.current_led_mode = 'stop'
-                    led.mode_stop()
+                self.publish_leds((255, 0, 0), (255, 0, 0))  # [스위치 출발] 대기 중 = 정지 상태이므로 빨강
             if self.start and self.parked:
                 # [추가] 주차 완료 후엔 어떤 제어도 하지 않고 계속 정지(앞으로 새는 것 방지). 주차가 마지막 미션.
                 self.mecanum_pub.publish(Twist())
@@ -858,22 +840,6 @@ class SelfDrivingNode(Node):
                     self.mecanum_pub.publish(twist)
                 else:
                     self.pid.clear()
-                    # [수정] 차선 미검출(lane_x<0) 폴백. 단, 코너 회전 중엔 직진 폴백 금지(회전 이탈 방지).
-                    if (not self.stop and not self.start_park and not self.doing_turn_right
-                            and not self.parked and lane_x < 0):
-                        # stale start_turn 해제: 코너가 끝난 지 오래(복귀시간 초과)인데 차선을 못 잡아 갇힌 경우
-                        #   (예: 횡단보도 위). 실제 코너 중(복귀시간 이내)이면 True 유지.
-                        if self.start_turn and (time.time() - self.start_turn_time_stamp) > self.turn_recover_time:
-                            self.start_turn = False
-                        if self.start_turn:
-                            # [코너 회전 중 순간 차선 놓침] 직진 폴백하면 대각선 이탈 → 발행 안 함(직전 회전 명령 유지).
-                            pass
-                        else:
-                            # [횡단보도 위 등 차선 끊김] 살살 직진해 폭을 지나 차선 재획득(정지 안 하게).
-                            fb = Twist()
-                            fb.linear.x = self.corner_speed
-                            self.mecanum_pub.publish(fb)
-                            self.get_logger().info('\033[1;32mDRIVE(fallback) lin=%.2f ang=0.00 (lane_x=-1 직진 폴백)\033[0m' % self.corner_speed)
 
              
                 if self.objects_info:
@@ -907,7 +873,6 @@ class SelfDrivingNode(Node):
             if time_d > 0:
                 time.sleep(time_d)
         self.mecanum_pub.publish(Twist())
-        led.cleanup()   # [빵판 LED] 종료 시 GPIO 정리(점멸 스레드 정지 + 핀 해제)
         rclpy.shutdown()
 
 
