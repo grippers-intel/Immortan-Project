@@ -144,7 +144,7 @@ class SelfDrivingNode(Node):
             },
             "turn_right": {
                 "linear_x": 0.375,  # TODO : 0.30→0.375 (좌0.5/우0.25 2:1 비율, track=0.185m 기준)
-                "angular_z": -1.0,  # TODO : -0.55→-1.35→-1.0 (과회전 문제로 낮춤)
+                "angular_z": -1.2,  # TODO : -0.55→-1.35→-1.0→-1.2 (우회전량 증가, 오른쪽 바퀴 더 낮춤)
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -711,8 +711,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 1.3
-                    ):  # 2.6→1.8→1.3초: 과회전 방지, ~74° 회전 후 라인디텍팅 PID 보정에 의존
+                        turn_elapsed > 1.1
+                    ):  # 2.6→1.8→1.3→1.1초: angular_z=-1.2로 올리면서 시간 줄여 과회전 방지 (1.2×1.1=1.32rad≈76°)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
