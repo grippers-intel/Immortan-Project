@@ -192,6 +192,9 @@ class SelfDrivingNode(Node):
         self.start_turn_time_stamp = 0
         self.count_turn = 0
         self.start_turn = False  # start to turn
+        # [LED] '지금 우회전 중인가' 표시용 플래그(깜빡이 구동). start_turn만 쓰면 확정(count>5)까지
+        #   ~0.5초 늦어 깜빡이가 '턴이 끝난 뒤' 켜짐 → lane_x>임계(하드턴 시작 즉시)도 함께 본다. 매 프레임 갱신.
+        self.turning_right = False
 
         self.count_right = 0
         self.count_right_miss = 0
@@ -613,8 +616,8 @@ class SelfDrivingNode(Node):
         elif self.stop and not self.start_park:
             # 정지(횡단보도/신호/시작게이트) → 빨강. (주차 이동 중은 stop=True여도 '움직임'이라 제외)
             led1 = led2 = RED
-        elif self.start_turn or self.doing_turn_right:
-            # 움직이며 우회전 → 왼쪽 초록 유지, 오른쪽만 노랑 점멸
+        elif self.turning_right:
+            # 움직이며 우회전(하드턴 시작 즉시~복귀, 표지판 동작 포함) → 왼쪽 초록, 오른쪽만 노랑 점멸
             led1 = GREEN
             led2 = YELLOW if blink else OFF
         else:
@@ -633,7 +636,7 @@ class SelfDrivingNode(Node):
                 bb_led.mode_park_done()                 # 전체 점멸
             elif self.stop and not self.start_park:
                 bb_led.mode_stop()                      # 빨강
-            elif self.start_turn or self.doing_turn_right:
+            elif self.turning_right:
                 bb_led.mode_drive_right()               # 초록 ON + 우측 노랑 점멸
             else:
                 bb_led.mode_straight()                  # 초록
@@ -826,6 +829,12 @@ class SelfDrivingNode(Node):
                 #   → lane_x 에 near 값을 받아 이후 로직(회전 threshold, PID)은 그대로 두고 판단 기준만 바꿈.
                 #   되돌리려면 lane_x_far 를 lane_x 로 받으면 기존 동작.
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(binary_image, image.copy())
+                # [LED 깜빡이] 지금 우회전 중인가 갱신. 일반 코너는 lane_x>임계가 되는 즉시 하드턴이 시작되므로
+                #   그 순간부터 켜지게 lane_x>임계도 본다(+회전복귀 start_turn +표지판동작 doing_turn_right).
+                #   주차경로/주차동작 중엔 우회전이 아니므로 제외. (update_leds는 다음 프레임에 이 값 반영 — 1프레임 지연)
+                self.turning_right = self.doing_turn_right or (
+                    not self.going_to_park and not self.start_park
+                    and (lane_x > self.turn_threshold or self.start_turn))
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 # [진단 로그] 코너 회전 중 멈춤 추적용. 매 프레임 출력(어느 블록이 실행되든).
