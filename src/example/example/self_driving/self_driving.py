@@ -132,6 +132,7 @@ class SelfDrivingNode(Node):
         self.stop_time = 0  # TODO 00 : 교차로 인식 시 일단 정지
         self.start_delay = True  # TODO 01 : 시작 딜레이 (오작동 우회전 방지)
         self.start_delay_time = 0  # TODO 01 : 시작 딜레이 (오작동 우회전 방지)
+        self._last_btn_time = 0  # 수동 더블클릭 감지용
         # TODO 01 : 상황별 주행 파라미터 추가(~113행)
         self.drive_params = {
             "straight": {
@@ -230,22 +231,28 @@ class SelfDrivingNode(Node):
         self.rgb_pub.publish(msg)
 
     def button_callback(self, msg):
-        if (
-            msg.state in (1, 5) and not self.start
-        ):  # 1=누르는 순간, 5=클릭확정 (둘 다 잡기)
-            self.get_logger().info(
-                "\033[1;32m%s\033[0m" % "버튼 입력 - 3초 후 주행 시작"
-            )
-            self.start_delay_time = time.time()
-            request = SetBool.Request()
-            request.data = True
-            self.set_running_srv_callback(request, SetBool.Response())
-        elif msg.state == 6:  # 더블클릭 - 언제든 초기화 가능
+        now = time.time()
+        if msg.state in (1, 5):
+            if self.start and (now - self._last_btn_time) < 0.5:
+                # 빠른 연속 클릭 = 수동 더블클릭 리셋
+                self.get_logger().info(
+                    "\033[1;32m%s\033[0m" % "연속클릭 - 대기 상태로 초기화"
+                )
+                self.mecanum_pub.publish(Twist())
+                self.param_init()
+            elif not self.start:
+                self.get_logger().info("\033[1;32m%s\033[0m" % "버튼 입력 - 주행 시작")
+                self.start_delay_time = now
+                request = SetBool.Request()
+                request.data = True
+                self.set_running_srv_callback(request, SetBool.Response())
+            self._last_btn_time = now
+        elif msg.state == 6:  # 하드웨어 더블클릭 이벤트 (백업)
             self.get_logger().info(
                 "\033[1;32m%s\033[0m" % "더블클릭 - 대기 상태로 초기화"
             )
-            self.mecanum_pub.publish(Twist())  # 즉시 정지
-            self.param_init()  # 모든 상태 초기화 (start=False 포함)
+            self.mecanum_pub.publish(Twist())
+            self.param_init()
 
     # TODO 02 : 교차로 우회전 동작 함수
     def turn_right_action(self):
@@ -438,8 +445,8 @@ class SelfDrivingNode(Node):
                         True  # 감지 즉시 0.05m/s 감속 (box_height 기준 원거리부터)
                     )
                     if (
-                        self.crosswalk_box_height > 30
-                    ):  # TODO : 20→30, 이동 중 24px가 최대라 40은 미도달, 감속 후 30은 도달 가능 + 2차 오정지(29px) 차단 → 수정
+                        self.crosswalk_box_height > 60
+                    ):  # 30→60: 더 가까이 접근 후 정지 (box_height=46에서 너무 일찍 멈추는 문제)
                         self.count_crosswalk += 1
                         if self.count_crosswalk >= 2:
                             self.count_crosswalk = 0
@@ -650,11 +657,11 @@ class SelfDrivingNode(Node):
                 if self.start_turn:
                     turn_elapsed = time.time() - self.start_turn_time_stamp
                     # TODO : 최소 1초는 회전 유지 (시작 직후 깜빡임으로 바로 탈출 방지)
-                    if turn_elapsed > 1.0 and len(center_x) >= 4 and center_x[3] != -1:
+                    if turn_elapsed > 0.8 and len(center_x) >= 4 and center_x[3] != -1:
                         self.count_turn_exit += 1  # TODO : 박스5->박스4 기준 변경 - 박스5는 끝까지 안 돌아오는 경우가 많아서 너무 늦게 탈출/영영 탈출 못함
                         if (
-                            self.count_turn_exit > 2
-                        ):  # TODO : 5->2, 박스4 재인식 후에도 확인 대기시간이 길어서 불필요하게 더 도는 문제 - 확인 프레임 줄여서 종료를 더 빠르게
+                            self.count_turn_exit > 1
+                        ):  # 2→1: 1프레임 빠른 종료 (과회전 방지)
                             self.start_turn = False
                             self.count_turn = 0
                             self.count_turn_exit = 0
@@ -665,8 +672,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 2.6
-                    ):  # TODO : 3.2->2.6초 - 정상 회전(약 2.2초, 90도 기준)은 여유있게 끝나야 하니 그보다 더 돌면 이미 과회전 가능성 높음. 못 찾으면 더 돌기보다 멈추고 직진(강제 직진 1.5초)으로 전환해서 차선 재탐색
+                        turn_elapsed > 1.8
+                    ):  # 2.6→1.8초: 2번째 코너에서 차선 소실 시 2.6s 내내 돌던 문제, 1번째 코너 정상 탈출(1.4s) 기준으로 여유 0.4s
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
