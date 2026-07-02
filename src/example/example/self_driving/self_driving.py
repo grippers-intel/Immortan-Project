@@ -168,7 +168,7 @@ class SelfDrivingNode(Node):
         self.park_area = (
             0  # 주차 표지판 박스 면적(px^2). 클수록 표지판에 가까움(거리 지표)
         )
-        self.park_min_area = 1200  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
+        self.park_min_area = 2000  # 이 면적 이상일 때만 주차 시작(표지판에 충분히 가까움). 너무 멀리서 주차하면 ↑, 가까이서도 안하면 ↓
         #   (실측 로그 기반으로 1200 설정)
         self.park_forward_time = 0.8  # 주차 시작 전 똑바로 직진하는 시간(초). 주차칸 앞까지 더 가서 주차하도록.
         #   (1.0→0.8: 주차가 너무 멀리 가서 멈춰 전진거리 축소. 더 멀면 ↓, 덜 가면 ↑)
@@ -416,7 +416,7 @@ class SelfDrivingNode(Node):
             self.last_led_state = None  # LED 강제 재발행되도록
         self.publish_leds((255, 0, 0), (255, 0, 0))  # 스탠바이 = 정지(빨강)
 
-    def shutdown(self, signum, frame):  # press 'ctrl+c' to close the program
+    def shutdown(self):  # press 'ctrl+c' to close the program
         self.is_running = False
 
     def image_callback(self, ros_image):  # callback target checking
