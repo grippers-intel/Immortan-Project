@@ -74,8 +74,15 @@ class SelfDrivingNode(Node):
 
         # [스위치 출발] 온보드 버튼(확장보드 key1/key2)으로 주행 시작.
         #   버튼 이벤트는 /ros_robot_controller/button 으로 발행됨(ButtonState: id=1/2, state).
-        #   규칙: 스위치로 출발(자동출발 -5 감점 방지). 버튼 누르면 button_callback에서 self.start=True.
+        #   규칙: 스위치로 출발(자동출발 -5 감점 방지).
+        #   - 한 번 누름  → 주행 시작 (스탠바이 상태일 때)
+        #   - 두 번 누름  → 스탠바이로 리셋(처음 상태로 되돌림) → 재테스트 편의
+        #   [주의] 단일/더블 구분을 위해 press 후 double_press_window(초) 동안 두 번째 press를 기다림 →
+        #          '한 번 누름' 출발엔 그만큼(약 0.5초) 지연이 생김.
         self.create_subscription(ButtonState, '/ros_robot_controller/button', self.button_callback, 1)
+        self._last_press_time = 0.0        # 마지막 press 시각(더블 판정용)
+        self.double_press_window = 0.5     # 이 시간(초) 안에 두 번 누르면 더블프레스로 인정
+        self._pending_single_timer = None  # 단일 press 지연 실행 타이머(더블 오면 취소)
 
         self.create_service(Trigger, '~/enter', self.enter_srv_callback) # enter the game
         self.create_service(Trigger, '~/exit', self.exit_srv_callback) # exit the game
@@ -298,13 +305,51 @@ class SelfDrivingNode(Node):
         return response
 
     def button_callback(self, msg):
-        # [스위치 출발] 온보드 버튼이 눌리면 주행 시작.
-        #   state=1(PRESSED 눌림), 5(CLICK 클릭) 둘 다 시작 트리거로 인정. id(key1/key2)는 무시(둘 중 아무 버튼).
-        #   enter(초기화)가 끝난 뒤에만, 아직 출발 전(not start)일 때만 반응 → 주행 중 오작동 방지.
-        if msg.state in (1, 5) and self.enter and not self.start:
-            self.get_logger().info('\033[1;32m%s\033[0m' % ('START button pressed (id=%d) -> 주행 시작' % msg.id))
+        # [스위치 출발/리셋] 온보드 버튼(key1/key2 아무거나) press 이벤트 처리.
+        #   물리 press 1회 = state=1(PRESSED) 1회 발행. 이 이벤트 간 시간차로 단일/더블을 구분한다.
+        #   - 한 번 누름  → double_press_window 후 on_single_press() (스탠바이면 출발)
+        #   - 두 번 누름  → on_double_press() (스탠바이로 리셋)
+        if msg.state not in (1, 5):
+            return
+        now = time.time()
+        if now - self._last_press_time < self.double_press_window:
+            # 더블프레스: 대기 중이던 단일 실행 취소 후 리셋
+            self._last_press_time = 0.0
+            if self._pending_single_timer is not None:
+                self._pending_single_timer.cancel()
+                self._pending_single_timer = None
+            self.on_double_press()
+        else:
+            # 첫 press: 창(window) 뒤에 단일 실행 예약(그 안에 두 번째 오면 위에서 취소됨)
+            self._last_press_time = now
+            if self._pending_single_timer is not None:
+                self._pending_single_timer.cancel()
+            self._pending_single_timer = threading.Timer(self.double_press_window, self.on_single_press)
+            self._pending_single_timer.start()
+
+    def on_single_press(self):
+        # [단일 press] 스탠바이(enter 완료 & 아직 출발 전)면 주행 시작. 주행 중이면 무시.
+        self._pending_single_timer = None
+        if self.enter and not self.start:
+            self.get_logger().info('\033[1;32m%s\033[0m' % 'START (single press) -> 주행 시작')
             with self.lock:
                 self.start = True
+
+    def on_double_press(self):
+        # [더블 press] 언제든 스탠바이로 리셋(주차 후 재테스트 편의). 다시 한 번 누르면 출발.
+        self.get_logger().info('\033[1;33m%s\033[0m' % 'DOUBLE press -> RESET to STANDBY (한 번 더 누르면 출발)')
+        self.reset_to_standby()
+
+    def reset_to_standby(self):
+        # 모든 주행 상태를 초기값으로 되돌려 스탠바이로. 구독/발행자는 유지(재-init 불필요).
+        with self.lock:
+            self.mecanum_pub.publish(Twist())   # 즉시 정지
+            self.param_init()                   # start/parked/going_to_park/crosswalk/turn 등 전부 초기화(start=False)
+            self.enter = True                   # 카메라·YOLO 구독은 살아있으므로 바로 다시 대기 가능
+            self.pid.clear()
+            self.pid_park.clear()
+            self.last_led_state = None          # LED 강제 재발행되도록
+        self.publish_leds((255, 0, 0), (255, 0, 0))  # 스탠바이 = 정지(빨강)
 
     def shutdown(self, signum, frame):  # press 'ctrl+c' to close the program
         self.is_running = False
