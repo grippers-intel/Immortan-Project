@@ -154,8 +154,8 @@ class SelfDrivingNode(Node):
                 "pid_d": 0.05,
             },
             "turn_right": {
-                "linear_x": 0.29,  # 좌바퀴 0.40 / 우바퀴 0.18 (linear 0.29, angular -1.189)
-                "angular_z": -1.189,  # 좌 0.40 우 0.18 맞춤 (기존 -1.4에서 완만해짐)
+                "linear_x": 0.31,  # 좌바퀴 0.44 / 우바퀴 0.18 (linear 0.31, angular -1.4)
+                "angular_z": -1.4,  # 회전속도 복원(빠른 회전=드리프트↓, 깔끔한 탈출). 좌 0.44 우 0.18
                 "pid_p": 0.4,
                 "pid_d": 0.05,
             },
@@ -451,26 +451,17 @@ class SelfDrivingNode(Node):
                             ts.box[1] - ts.box[3]
                         )
                         if ts.class_name == "red" and light_area > 100:
-                            is_red = True  # 작은 red도 감지(민감)
+                            is_red = True  # 빨강 감지(민감)
+                    # 동시조건: 빨강이면 대기, 빨강 아니면(초록/무신호) 출발
                     if is_red:
-                        self.start_light_red_seen = True
-                        self.start_light_red_last_time = time.time()
-                    # 오직 하나: red를 봤고, 3초간 안 보이면 출발
-                    if (
-                        self.start_light_red_seen
-                        and time.time() - self.start_light_red_last_time > 3.0
-                    ):
-                        self.start_light_wait = False
-                        self.accel_ramp_active = True  # 출발 가속 구간 시작
-                        self.accel_ramp_start_time = time.time()
-                        self.get_logger().info(
-                            "\033[1;32m빨간불 꺼짐(3초) → 출발\033[0m"
-                        )
-                    else:
-                        self.mecanum_pub.publish(
-                            Twist()
-                        )  # red 볼 때까지/꺼질 때까지 대기
+                        self.mecanum_pub.publish(Twist())  # 빨강 → 대기
                         continue
+                    self.start_light_wait = False
+                    self.accel_ramp_active = True  # 출발 가속 구간 시작
+                    self.accel_ramp_start_time = time.time()
+                    self.get_logger().info(
+                        "\033[1;32m빨강 아님(초록/무신호) → 출발\033[0m"
+                    )
 
                 h, w = image.shape[:2]
 
@@ -486,8 +477,8 @@ class SelfDrivingNode(Node):
                 )  # ← 추가
                 if self.crosswalk_ignore:  # TODO 00 : ignore 체크 → 추가
                     if (
-                        time.time() - self.crosswalk_ignore_time > 2.0
-                    ):  # TODO : ...→1.5→2.0→1.7→2.0 - 정지 후 같은 횡단보도 재정지 방지 (2.0s≈100cm@0.5m/s)
+                        time.time() - self.crosswalk_ignore_time > 3.0
+                    ):  # ...→2.0→3.0 - 같은 횡단보도 두번 정지(#2·#4·#6·#8) 방지. 무시 만료 직후 재감지 겹침 해결
                         self.crosswalk_ignore = False
                 if (
                     60 < self.crosswalk_distance
@@ -673,16 +664,10 @@ class SelfDrivingNode(Node):
                         if not self.start_turn:
                             self.pid.SetPoint = 180  # TODO 도로 중앙값 조절 (...->170->200->180) 170원래값+10, 살짝만 왼쪽 (증가=왼쪽 확인됨)
                             if self.run_mode == "parking":
-                                # 파킹모드: 차선 무시하고 직진. 횡단보도 보이면 가로중앙 추적하며 전진
-                                if (
-                                    self.crosswalk_distance > 0
-                                    and self.machine_type != "MentorPi_Acker"
-                                ):
-                                    err = self.crosswalk_center_x - (w / 2)
-                                    twist.angular.z = common.set_range(
-                                        -0.001 * err, -0.15, 0.15
-                                    )  # 횡단보도 중앙 추적 (err>0=횡단보도 오른쪽→우조향)
-                                self.pid.clear()  # 횡단보도 없으면 직진(angular 0 유지)
+                                # 파킹모드: 고정 우측 아크 (좌바퀴 0.2 / 우바퀴 0.12)
+                                # linear_x=0.16(PARKING_SPEED) + angular_z=-0.432 → 좌 0.20 / 우 0.12
+                                twist.angular.z = -0.432
+                                self.pid.clear()
                             elif (
                                 self.crosswalk_ignore
                                 and time.time() - self.crosswalk_ignore_time < 1.0
@@ -743,7 +728,9 @@ class SelfDrivingNode(Node):
                     # 파킹모드: 저속 직진 (차선 속도 무시). 횡단보도 감속(pre_slow_down) 중엔 creep 유지
                     # ★체크포인트: 아래 PARKING_SPEED 튜닝 대상. 0.2로 먼저 테스트 →
                     #   ① 중앙추적 값이 많이 안 흔들리고 ② 우회전 직후 횡단보도 바로 보여서 중앙정렬 쉬우면 → 속도 올려도 됨
-                    PARKING_SPEED = 0.2  # ★튜닝 대상
+                    PARKING_SPEED = (
+                        0.16  # 좌 0.2 / 우 0.12 아크용 (angular -0.432와 조합)
+                    )
                     if (
                         self.run_mode == "parking"
                         and not self.stop
@@ -778,8 +765,8 @@ class SelfDrivingNode(Node):
                         self.count_turn_exit = max(0, self.count_turn_exit - 1)
 
                     if (
-                        turn_elapsed > 0.95
-                    ):  # 1.0→0.95초 상한: angular_z=-1.4 기준 1.4×0.95=1.33rad≈76°
+                        turn_elapsed > 1.05
+                    ):  # 0.95→1.05초 상한: angular_z=-1.4 기준 1.4×1.05=1.47rad≈84° (조금 덜 돌아서 +8°)
                         self.start_turn = False
                         self.count_turn = 0  # TODO 01 : 카운트 동시 리셋
                         self.count_turn_exit = 0
