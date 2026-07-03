@@ -500,8 +500,8 @@ class SelfDrivingNode(Node):
 
                     if self.pre_slow_down:
                         if (
-                            self.crosswalk_box_height > 19
-                        ):  # 12→17→19: 더 가까이 가서 정지
+                            self.crosswalk_box_height > 13
+                        ):  # 19→13: 전부 무시 문제 → 더 일찍 확실히 정지 (빠른 접근에도 놓치지 않게)
                             self.count_crosswalk += 1
                             if (
                                 self.count_crosswalk >= 1
@@ -904,10 +904,10 @@ class SelfDrivingNode(Node):
                         f"[crosswalk raw] box_height: {box_height}, box_width: {box_width}"
                     )  # TODO : 필터링 전 모든 크기 로그 → 튜닝용
                     if (
-                        10 < box_height < 180
-                        and 150 < box_width
-                        and box_width > 2 * box_height
-                    ):  # height 15->10: 먼 거리 감지용, width>150: 노이즈 차단, width>2*height: 정사각형 오인식 차단 (실제 횡단보도는 가로>>세로)
+                        10 < box_height < 250
+                        and 120 < box_width
+                        and box_width > 1.5 * box_height
+                    ):  # 완화: 180→250(가까이도 감지), width 150→120, 2배→1.5배(비스듬/빠른접근도 감지) - '전부 무시' 대응
                         if (
                             center[1] > min_distance
                         ):  # Obtain recent y-axis pixel coordinate of the crosswalk
@@ -923,14 +923,12 @@ class SelfDrivingNode(Node):
                     self.get_logger().info(
                         f"[right raw] box_height: {sign_h}, box_width: {sign_w}"
                     )
-                    self.count_right += 1  # 주행/정지 무관 보일 때마다 누적
+                    self.count_right += 1  # 보일 때마다 누적
                     self.count_right_miss = 0
                     self.right_raw_last_seen_time = (
                         time.time()
                     )  # 표지판 본 시각(정지 유지용)
-                    if (
-                        self.count_right >= 3
-                    ):  # 5→3: 짧은 정지에도 카운트 채워 83° 회전 트리거 (표지판 보고 직진 방지)
+                    if self.count_right >= 2:  # 5→3→2: 표지판 확인 잘 안돼서 더 낮춤
                         self.have_turn_right = True
                 elif class_name == "park":
                     sign_h = abs(i.box[1] - i.box[3])
