@@ -250,7 +250,7 @@ class SelfDrivingNode(Node):
         self.crosswalk_min_aspect = 2.0     # [종횡비 필터] 박스 가로/세로 비가 이 값 이상일 때만 인정.
                                             #   실제 횡단보도는 가로로 긴 줄무늬(가로≫세로)라 통과하고, 바닥 까진 자국은
                                             #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
-        self.crosswalk_stop_duration = 1.0  # 정지 유지 시간(초). (2.0→1.0: 모든 횡단보도/신호 대기 1초로 단축)
+        self.crosswalk_stop_duration = 0.7  # 정지 유지 시간(초). (2.0→1.0: 모든 횡단보도/신호 대기 1초로 단축)
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2 # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False     # 현재 횡단보도에서 정지 중인가
@@ -320,7 +320,7 @@ class SelfDrivingNode(Node):
         #   빨강이 최근(red_hold_time 이내)에 보였으면 빨강으로 간주. 초록으로 바뀌면 빨강이 사라지고
         #   red_hold_time 후 is_red=False → 출발(초록을 직접 검출하지 않아도 됨). 빨강은 잘 잡히는 전제.
         self.red_last_seen_time = 0
-        self.red_hold_time = 1.5   # 빨강 마지막 검출 후 이 시간(초)까지 빨강으로 유지. 너무 빨리 출발하면 ↑
+        self.red_hold_time = 0.7   # 빨강 마지막 검출 후 이 시간(초)까지 빨강으로 유지. 너무 빨리 출발하면 ↑
         # [신호등 정지 트리거] 규칙: 신호등 인식하면 우선 멈춤. 횡단보도 검출이 끊겨도 '가까운 빨강'을
         #   보면 정지하도록 별도 트리거. '가까운' 판단은 박스 면적(멀리 있는 빨강엔 길 한복판서 안 멈추게).
         self.red_close_time = 0    # 가까운 빨강 마지막 검출 시각
