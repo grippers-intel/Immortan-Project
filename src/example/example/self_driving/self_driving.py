@@ -242,12 +242,28 @@ class SelfDrivingNode(Node):
         self.start_turn_time_stamp = 0
         self.count_turn = 0
         self.start_turn = False  # start to turn
+        # [LED] '지금 우회전 중인가' 표시용 플래그(깜빡이 구동). start_turn만 쓰면 확정(count>5)까지
+        #   ~0.5초 늦어 깜빡이가 '턴이 끝난 뒤' 켜짐 → lane_x>임계(하드턴 시작 즉시)도 함께 본다. 매 프레임 갱신.
+        self.turning_right = False
+        # [코너 카운트] 물리 코너 번호(1,2,3...). 코너 직후 감속(corner_speed)을 특정 코너에서만 생략하려고 셈.
+        #   start_turn False→True 전환마다 세되, 같은 코너 내 재트리거는 디바운스로 무시(코너는 로그상 ~9초 간격).
+        self.corner_count = 0
+        self.last_corner_time = 0.0
+        self.corner_debounce = (
+            4.0  # 이 시간(초) 이내 재트리거는 같은 코너로 간주(코너 간격 <9초라 안전)
+        )
+        self.no_slowdown_corner = 0  # 이 번호의 코너 직후엔 감속 생략(0=항상 감속). [복원] 2번 코너도 횡단보도가
+        #   코너 때문에 cw≈294로 늦게 검출돼 풀속으론 못 멈추고 넘어감 → 2→0(모든 코너 감속).
 
         self.count_right = 0
         self.count_right_miss = 0
         self.turn_right = False  # right turning sign
         self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
 
+        # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
+        self.count_go = 0
+        self.go_signal_time = 0  # 직진 표지판 마지막 인식 시각
+        self.go_signal_duration = 3.0  # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
         self.last_led_state = (
             None  # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
         )
@@ -302,12 +318,19 @@ class SelfDrivingNode(Node):
         )
         #   실제 횡단보도는 가로로 긴 줄무늬(가로≫세로)라 통과하고, 바닥 까진 자국은
         #   덩어리/정사각형이라 걸러짐. 진짜 횡단보도도 걸러지면 ↓(1.7), 오검출 남으면 ↑(2.5)
-        self.crosswalk_stop_duration = 2.0  # 정지 유지 시간(초)
+        self.crosswalk_stop_duration = (
+            1.0  # 정지 유지 시간(초). (2.0→1.0: 모든 횡단보도/신호 대기 1초로 단축)
+        )
         self.crosswalk_approach_dist = 180  # 횡단보도가 이 거리 이상(가까워지기 시작)이면 접근 감속 시작. 값↓=더 멀리서부터 감속.
         self.crosswalk_approach_speed = 0.2  # 횡단보도 접근 중 속도(관성 오버슛↓). 여전히 지나치면 ↓, 너무 굼뜨면 ↑.
         self.crosswalk_stopping = False  # 현재 횡단보도에서 정지 중인가
         self.crosswalk_stop_time = 0  # 정지 시작 시각
         self.crosswalk_passed = False  # 이번 횡단보도 통과 처리 완료(중복 정지 방지)
+
+        # [시작 신호등] 출발 버튼을 눌러도, 시작 지점 신호등이 '빨강'이면 출발하지 않고 대기.
+        #   빨강이 꺼지면(초록/사라짐) 출발. 두번째 신호등과 동일한 '빨강 신선도(is_red)' 기준 사용.
+        #   started_moving: 최초 출발을 마쳤는가. False인 동안만 이 시작 게이트가 활성(이후엔 기존 로직만).
+        self.started_moving = False
 
         self.start_slow_down = False  # slowing down sign
         self.normal_speed = 0.45  # normal driving speed (0.6은 카메라 15fps로 비전제어 한계 초과→미션 실패. 0.45로 타협)
@@ -692,8 +715,9 @@ class SelfDrivingNode(Node):
         ]
         self.rgb_pub.publish(msg)
 
-    # [LED] 현재 주행 상태에 맞춰 LED 색 결정. main 루프에서 매 프레임 호출.
-    #   규칙: 주행=녹색 / 정지=빨강 / 화살표 방향=노란 점멸 / 주차완료=전체 점멸.
+    # [LED] 규격: 움직임=초록(양쪽) / 정지=빨강 / 주차완료=전체 점멸(예외).
+    #   우회전 동작(코너 start_turn / 우회전표지판 doing_turn_right) 중엔 왼쪽 초록·오른쪽만 노랑 점멸.
+    #   '정지' 판정 = self.stop 이면서 주차 동작 중(start_park)이 아닐 때. (주차 이동 중은 '움직임'=초록)
     def update_leds(self):
         GREEN = (0, 255, 0)
         RED = (255, 0, 0)
@@ -701,37 +725,36 @@ class SelfDrivingNode(Node):
         OFF = (0, 0, 0)
         blink = int(time.time() / 0.3) % 2 == 0  # 약 1.6Hz 점멸
         if self.parked:
-            # 주차 완료 → 모든 LED 점멸
+            # 주차 완료(예외) → 양쪽 점멸
             c = YELLOW if blink else OFF
             led1 = led2 = c
-        elif self.stop:
-            # 정지 → 빨강
+        elif self.stop and not self.start_park:
+            # 정지(횡단보도/신호/시작게이트) → 빨강. (주차 이동 중은 stop=True여도 '움직임'이라 제외)
             led1 = led2 = RED
-        elif self.doing_turn_right or self.turn_right:
-            # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
-            led1 = OFF
+        elif self.turning_right:
+            # 움직이며 우회전(하드턴 시작 즉시~복귀, 표지판 동작 포함) → 왼쪽 초록, 오른쪽만 노랑 점멸
+            led1 = GREEN
             led2 = YELLOW if blink else OFF
         else:
-            # 주행 → 녹색
+            # 그 외 움직임(직진/주차이동 등) → 양쪽 초록
             led1 = led2 = GREEN
-        self.publish_leds(led1, led2)  # 온보드 RGB (기존 그대로)
-        self.update_breadboard_leds()  # [빵판] 온보드와 동일한 상태로 함께 표시
+        self.publish_leds(led1, led2)  # 온보드 RGB
+        self.update_breadboard_leds()  # [빵판] 동일 규격으로 함께 표시
 
-    # [빵판 LED] 온보드 LED와 '동일한' 상태를 빵판 다색 LED로도 표시.
-    #   온보드(update_leds)의 판정 순서와 동일하게 매핑. set_mode 가드가 있어 매 프레임 호출해도 안전(논블로킹).
-    #   매핑: 주차완료=전체점멸 / 정지·대기=빨강 / 우회전=우측노랑점멸 / 직진표지판=양쪽노랑점멸 / 주행=초록.
+    # [빵판 LED] 온보드와 동일 규격. set_mode 가드로 매 프레임 호출해도 안전(논블로킹).
+    #   매핑: 주차완료=전체 점멸 / 정지=빨강 / 우회전=초록 ON+우측 노랑 점멸 / 그 외 움직임=초록.
     def update_breadboard_leds(self):
         if not _BB_LED_OK:
             return
         try:
             if self.parked:
-                bb_led.mode_park_done()
-            elif self.stop:
-                bb_led.mode_stop()
-            elif self.doing_turn_right or self.turn_right:
-                bb_led.mode_turn_right()
+                bb_led.mode_park_done()  # 전체 점멸
+            elif self.stop and not self.start_park:
+                bb_led.mode_stop()  # 빨강
+            elif self.turning_right:
+                bb_led.mode_drive_right()  # 초록 ON + 우측 노랑 점멸
             else:
-                bb_led.mode_straight()
+                bb_led.mode_straight()  # 초록
         except Exception as e:
             self.get_logger().warn("breadboard LED error: %s" % str(e))
 
@@ -803,10 +826,15 @@ class SelfDrivingNode(Node):
                 #   crosswalk_distance가 요동쳐도(예: 454→316→337) 정지가 풀리지 않게 함. 예전엔 316처럼
                 #   임계값 아래로 잠깐 떨어지면 정지가 한 프레임 풀려 차선추종이 로봇을 앞으로 밀어 '덜컥'거림.
                 #   정지는 stopped_enough(2초) 후 passed=True 될 때만 해제된다.
+                # [시작 신호등 게이트] 아직 최초 출발 전(started_moving=False)인데 빨강(is_red)이면 → 정지 유지.
+                #   red_close(가까운 빨강)보다 민감한 is_red(모든 빨강)를 써서 시작선 신호등이 멀어도 확실히 대기.
+                #   두번째 신호등과 동일하게, stopped_enough(2초) 지나고 빨강이 꺼지면 통과한다(아래 해제 로직 공용).
+                start_red_gate = not self.started_moving and is_red
                 if (
                     self.crosswalk_distance > self.crosswalk_stop_dist
                     or red_close
                     or self.crosswalk_stopping
+                    or start_red_gate
                 ) and not self.crosswalk_passed:
                     # 횡단보도가 충분히 가까움 → 정지 단계
                     if not self.crosswalk_stopping:
@@ -825,6 +853,7 @@ class SelfDrivingNode(Node):
                         )
                         self.crosswalk_stopping = False
                         self.stop = False
+                        self.started_moving = True  # [시작 신호등] 최초 출발 완료 → 이후 시작 게이트 비활성
                         # [우회전] 우회전 표지판을 본 상태(turn_right)면, 정지 후 우회전 동작 실행
                         #   [수정] going_to_park/start_park 중엔 실행 금지 — 주차장 부근에서 turn_right가
                         #   재무장돼 주차 중에 두 번째 우회전이 실행되어 주차를 망치던 버그 방지.
@@ -850,6 +879,10 @@ class SelfDrivingNode(Node):
                         self.crosswalk_passed = False
                         self.crosswalk_stopping = False
                     self.stop = False
+                    # [시작 신호등] 시작선에서 빨강이 아니면(초록/무신호) 그냥 출발 → 최초 출발 완료 표시.
+                    #   (YOLO는 대기 중에도 돌아 red_last_seen_time을 갱신하므로 is_red가 정확 → 조기표시 위험 없음)
+                    if not self.started_moving and not is_red:
+                        self.started_moving = True
 
                 # [추가] 횡단보도 접근 감속: 검출됐고(거리≥approach_dist) 아직 통과/정지 전이면 미리 감속해
                 #   정지 명령 후 관성 오버슛을 줄인다. 특히 출발 직후 '바로 앞' 횡단보도는 늦게(가까이서)
@@ -988,6 +1021,14 @@ class SelfDrivingNode(Node):
                 result_image, lane_angle, lane_x_far, lane_x = self.lane_detect(
                     binary_image, image.copy()
                 )
+                # [LED 깜빡이] 지금 우회전 중인가 갱신. 일반 코너는 lane_x>임계가 되는 즉시 하드턴이 시작되므로
+                #   그 순간부터 켜지게 lane_x>임계도 본다(+회전복귀 start_turn +표지판동작 doing_turn_right).
+                #   주차경로/주차동작 중엔 우회전이 아니므로 제외. (update_leds는 다음 프레임에 이 값 반영 — 1프레임 지연)
+                self.turning_right = self.doing_turn_right or (
+                    not self.going_to_park
+                    and not self.start_park
+                    and (lane_x > self.turn_threshold or self.start_turn)
+                )
                 # [튜닝 로그] 필요시 주석 해제. near=회전판단 기준값, far=기존 max값.
                 # self.get_logger().info('\033[1;36mlane_x(near)=%d  far=%d  (turn_threshold=%d)\033[0m' % (lane_x, lane_x_far, self.turn_threshold))
                 # [진단 로그] 코너 회전 중 멈춤 추적용. 매 프레임 출력(어느 블록이 실행되든).
@@ -1064,6 +1105,17 @@ class SelfDrivingNode(Node):
                             self.start_turn = True
                             self.count_turn = 0
                             self.start_turn_time_stamp = time.time()
+                            # [코너 카운트] 디바운스 지나면 새 물리 코너로 번호 증가(같은 코너 재트리거는 무시)
+                            if (
+                                time.time() - self.last_corner_time
+                                > self.corner_debounce
+                            ):
+                                self.corner_count += 1
+                                self.get_logger().info(
+                                    "\033[1;36m=== CORNER #%d ===\033[0m"
+                                    % self.corner_count
+                                )
+                            self.last_corner_time = time.time()
                         if self.machine_type != "MentorPi_Acker":
                             twist.angular.z = (
                                 self.turn_angular_z
@@ -1112,7 +1164,12 @@ class SelfDrivingNode(Node):
                                 twist.angular.z = 0.15 * math.tan(-0.5061) / 0.145
                     # [수정] 회전 '직후 복귀' 구간에서만 감속(코너 직후 갑툭튀 횡단보도 대비).
                     #   실제 급회전 중(lane_x>threshold)엔 감속 안 함 — 감속하면 반경이 좁아져 과회전/불안정.
-                    if self.start_turn and lane_x <= self.turn_threshold:
+                    #   [추가] no_slowdown_corner 번째 코너는 감속 생략 — 그 코너 뒤 횡단보도가 멀어 순항 유지.
+                    if (
+                        self.start_turn
+                        and lane_x <= self.turn_threshold
+                        and self.corner_count != self.no_slowdown_corner
+                    ):
                         twist.linear.x = self.corner_speed
                     # [진단 로그] 차선추종/코너 블록이 실제로 로봇에 내보내는 속도. 코너 중 lin이 0으로
                     #   떨어지거나 ang이 안 나가면 여기서 잡힘. (이 로그가 안 찍히면 stop 때문에 블록이 스킵된 것)
@@ -1233,6 +1290,13 @@ class SelfDrivingNode(Node):
                         and center[1] > min_distance
                     ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                         min_distance = center[1]
+                elif (
+                    class_name == "go"
+                ):  # [LED] 직진 화살표 표지판 → 노란 LED 점멸 트리거
+                    self.count_go += 1
+                    if self.count_go >= 3:
+                        self.go_signal_time = time.time()
+                        self.count_go = 0
                 elif class_name == "right":  # obtain the right turning sign
                     # [수정] 표지판이 '충분히 가까울 때'(박스 큼)만 카운트 → 멀리서 일찍 turn_right가 켜져
                     #   엉뚱한 앞 코너에서 깜빡이가 켜지거나 일반 코너링이 우회전을 가로채던 문제 방지.
