@@ -39,7 +39,7 @@ import numpy as np
 
 import rclpy
 from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from cv_bridge import CvBridge
@@ -84,12 +84,19 @@ PARK_SIDE_SPEED = 0.20  # 주차 수직이동 속도
 TURN_ANGULAR = 1.30  # 우회전 각속도 (rad/s)  ★
 TURN_ANGLE_DEG = 80.0  # 우회전 목표 각도 (°) — 오도메트리 기반  ★
 TURN_TIMEOUT = 4.0  # 오도메트리 실패 시 안전 타임아웃 (초)  ★
+TURN_ENTRY_T = (
+    0.8  # 우회전 전 교차로 중앙까지 직진 시간 (초) — 표지판 위치에서 조기 회전 방지  ★
+)
 
 CROSSWALK_WAIT = 2.0  # 신호등 없는 횡단보도 정지 시간 (초) — 규칙 6
 CROSSWALK_EXIT_T = 1.0  # 횡단보도 탈출 최소 전진 시간 (초, 무조건 이동)  ★
 CROSSWALK_EXIT_TIMEOUT = (
     3.0  # 횡단보도 탈출 최대 시간 (초) — 인식 실패 시 무한 전진 방지 안전장치  ★
 )
+# 코스의 횡단보도는 교차로 양쪽 2줄 1쌍 — 첫 줄 정지 후 둘째 줄을 같은 stage로 재카운트하는
+# 문제(실주행 로그: 완료 2.2초 뒤 재트리거) 방지를 위해 재무장 시간을 5초로 설정.
+# 다음 모서리까지 주행 시간(>5초)보다는 짧아야 함  ★
+CROSSWALK_REARM_T = 5.0  # 횡단보도 재무장 시간 (초) — 구 2.0
 ARROW_BLINK_TIME = 1.5  # 황색 LED 점멸 지속 시간 (초)
 TRAFFIC_TIMEOUT = 15.0  # 신호등 최대 대기 시간 (초)
 
@@ -98,7 +105,9 @@ PARK_SIDE_TIME = 2.5  # 주차 수직이동 지속 시간 (초)  ★ (이전팀 
 # ~215에 고정되고 접근할수록 화면 위로 이동. 접근 시 커지는 bbox 면적 기준으로 변경.
 # 라벨 분포(640px 기준): p50=360, p95=864, max=1200
 PARK_STOP_AREA = 800  # park 표지판 정지 면적 임계값 (px²)  ★
-PARK_TIMEOUT = 5.0  # 주차 직진 최대 시간 (초, 안전장치)
+# 실주행: 5초(0.15m/s×5=0.75m)로는 조기 트리거 시 표지판까지 도달 못하고 엉뚱한 곳에서
+# 측면 이동 시작 → 10초로 연장 (면적 조건이 정상 작동하면 타임아웃 전에 정지)
+PARK_TIMEOUT = 10.0  # 주차 직진 최대 시간 (초, 안전장치)  ★ (5→10)
 
 # 감지 임계값
 CROSSWALK_NEAR_Y = (
@@ -119,7 +128,9 @@ PARK_COUNT = 6  # ★ 오감지 방지: 6프레임 연속 확인
 TRAFFIC_AREA_MIN = 100  # 신호등 최소 감지 면적 (px²)  ★ (200→100)
 PARK_AREA_MIN = 200  # park 최소 감지 면적 (px²) — 라벨 min=273, 전체 통과 확인
 ARROW_AREA_MIN_GO = 600  # 직진 표지판 최소 감지 면적 (px²)  ★ (2000→600)
-ARROW_AREA_MIN_RIGHT = 450  # 우회전 표지판 최소 감지 면적 (px²)  ★ (500→450)
+# 실주행: 우회전 표지판을 원거리에서 인식하자마자 회전해 잔디 진입 → 근거리에서만 반응하도록
+# 상향 (라벨 p50=754, p75=1140, max=2332 — 900은 근접 프레임에서 안정적으로 통과)
+ARROW_AREA_MIN_RIGHT = 900  # 우회전 표지판 최소 감지 면적 (px²)  ★ (450→900)
 
 # 급커브 처리
 SHARP_TURN_X = (
@@ -128,6 +139,9 @@ SHARP_TURN_X = (
 SHARP_TURN_Z = -0.8  # 급커브 조향각  ★ (-1.2→-0.8: 과잉 우회전 방지)
 SHARP_TURN_TIME = 0.2  # 급커브 유지 시간 (초)  ★ (0.3→0.2)
 SHARP_TURN_COUNT = 3  # 급커브 진입 연속 프레임 (2→3: 오탐 방지)
+# 실주행: 모서리 회전 중 차선이 ROI를 벗어나면 즉시 정지해 코너에 갇힘 →
+# 회전 중 차선 유실 시 이 시간만큼 회전을 유지하며 차선 재탐색
+SHARP_TURN_HOLD = 0.8  # 급커브 중 차선 유실 시 회전 유지 시간 (초)  ★
 
 # 코스 횡단보도 설정
 MAX_CROSSWALK_STAGE = 4  # S1~S4 총 4회
@@ -183,6 +197,12 @@ class SelfDrivingNode(Node):
         self._park_triggered = False
         self._park_side_start = None  # 주차 2단계 시작 시각 (독립 타이머)
         self._cw_exit_start = None  # 횡단보도 탈출 이동 시작 시각 (독립 타이머)
+
+        # ── 현장 진단용 (스로틀 로그) ─────────────────────────────────────────
+        self._hb_last = 0.0  # 하트비트 로그 마지막 출력 시각
+        self._img_warn_last = 0.0  # 이미지 미수신 경고 마지막 출력 시각
+        self._lane_warn_last = 0.0  # 차선 미검출 경고 마지막 출력 시각
+        self._dbg_lane_x = -1.0  # 최근 차선 x (하트비트 표시용)
 
         # ── 급커브 상태 ───────────────────────────────────────────────────────
         self._cnt_turn = 0
@@ -387,6 +407,12 @@ class SelfDrivingNode(Node):
             try:
                 image = self.image_queue.get(block=True, timeout=1)
             except queue.Empty:
+                # 카메라 이미지 미수신 — 5초마다 경고 (원인: 토픽 미발행/구독 실패)
+                if time.time() - self._img_warn_last > 5.0:
+                    self._img_warn_last = time.time()
+                    self.get_logger().warn(
+                        f"[진단] 카메라 이미지 미수신 (state={self._fsm_state})"
+                    )
                 continue
 
             result_image = image.copy()
@@ -407,6 +433,16 @@ class SelfDrivingNode(Node):
                 result_image = self._state_parking(image, result_image)
             elif self._fsm_state == State.DONE:
                 self._stop()
+
+            # 3초마다 하트비트: 상태·차선·감지 요약 (현장 디버깅용)
+            if time.time() - self._hb_last > 3.0:
+                self._hb_last = time.time()
+                d = self._scan_objects()
+                self.get_logger().info(
+                    f"[HB] state={self._fsm_state} lane_x={self._dbg_lane_x:.0f} "
+                    f"cw_y={d['crosswalk_y']} traffic={d['traffic']} "
+                    f"arrow={d['arrow']} park_a={d['park_area']}"
+                )
 
             result_image = self._draw_objects(result_image)
             bgr = cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR)
@@ -436,8 +472,9 @@ class SelfDrivingNode(Node):
 
         detected = self._scan_objects()
 
-        # 1) 주차 표지판
-        if detected["park"]:
+        # 1) 주차 표지판 — S4까지 완료(stage>=4)한 뒤에만 반응
+        #    (맵이 작아 P 사인이 코스 초반부터 원거리로 보임 → 조기 주차 방지)
+        if detected["park"] and self.crosswalk_stage >= MAX_CROSSWALK_STAGE:
             self._cnt_park += 1
             if self._cnt_park >= PARK_COUNT and not self._park_triggered:
                 self._cnt_park = 0
@@ -571,15 +608,17 @@ class SelfDrivingNode(Node):
         return result_image
 
     def _schedule_crosswalk_reset(self):
-        """이전 타이머 취소 후 2초 타이머 재시작 — 중복 스레드로 인한 조기 해제 방지"""
+        """이전 타이머 취소 후 재무장 타이머 재시작 — 쌍둥이 횡단보도 이중 카운트 방지"""
         if self._cw_reset_timer is not None:
             self._cw_reset_timer.cancel()
-        self._cw_reset_timer = threading.Timer(2.0, self._do_crosswalk_reset)
+        self._cw_reset_timer = threading.Timer(
+            CROSSWALK_REARM_T, self._do_crosswalk_reset
+        )
         self._cw_reset_timer.daemon = True
         self._cw_reset_timer.start()
 
     def _do_crosswalk_reset(self):
-        """2초 후 crosswalk_done 해제 → 다음 횡단보도 처리 가능"""
+        """재무장 시간 경과 후 crosswalk_done 해제 → 다음 횡단보도 처리 가능"""
         self._crosswalk_done = False
 
     # =========================================================================
@@ -622,15 +661,21 @@ class SelfDrivingNode(Node):
                 self._move(linear_x=NORMAL_SPEED)
 
         elif self._arrow_direction == "right":
+            # 0) 표지판은 교차로 앞에 있음 → 교차로 중앙까지 직진 후 회전 (조기 회전 방지)
+            if elapsed < TURN_ENTRY_T:
+                self._move(linear_x=TURN_SPEED)
+                self._turn_start_yaw = self.degree  # 회전 직전 기준각 갱신
+                return result_image
+
             turned = self._angle_diff_deg(self.degree, self._turn_start_yaw)
-            if turned < TURN_ANGLE_DEG and elapsed < TURN_TIMEOUT:
+            if turned < TURN_ANGLE_DEG and elapsed < TURN_ENTRY_T + TURN_TIMEOUT:
                 self._move(linear_x=TURN_SPEED, angular_z=-TURN_ANGULAR)
-            elif elapsed >= TURN_TIMEOUT + 3.0:
+            elif elapsed >= TURN_ENTRY_T + TURN_TIMEOUT + 3.0:
                 # 회전 완료 후 3초 내 차선 미발견 → 강제 전환
                 self.get_logger().warn("[INTERSECTION] 차선 탐색 타임아웃 → 강제 전환")
                 self._transition(State.LINE_FOLLOW)
             else:
-                if elapsed >= TURN_TIMEOUT:
+                if elapsed >= TURN_ENTRY_T + TURN_TIMEOUT:
                     self.get_logger().warn(
                         f"[INTERSECTION] 오도메트리 타임아웃 ({turned:.1f}°) → 차선 탐색 중"
                     )
@@ -694,8 +739,28 @@ class SelfDrivingNode(Node):
     def _do_line_follow(self, lane_x: float, lane_angle: float, speed: float):
         twist = Twist()
         twist.linear.x = float(speed)
+        self._dbg_lane_x = lane_x
 
         if lane_x < 0:
+            # 급커브 회전 중 차선 일시 유실 → SHARP_TURN_HOLD 동안 회전 유지
+            # (모서리에서 차선이 ROI를 벗어나 정지하던 문제 대응)
+            if (
+                self._is_turning
+                and time.time() - self._turn_start_time
+                < SHARP_TURN_TIME + SHARP_TURN_HOLD
+            ):
+                twist.linear.x = float(SLOW_SPEED)
+                twist.angular.z = SHARP_TURN_Z
+                self.cmd_vel_pub.publish(twist)
+                return
+            self._is_turning = False
+
+            # 차선 미검출 → 정지 (2초마다 경고)
+            if time.time() - self._lane_warn_last > 2.0:
+                self._lane_warn_last = time.time()
+                self.get_logger().warn(
+                    "[진단] 차선 미검출 → 정지 (LAB 임계값/조명 확인 필요)"
+                )
             self._stop()
             self.pid.clear()
             return
@@ -792,8 +857,12 @@ class SelfDrivingNode(Node):
     # =========================================================================
     def shutdown(self):
         self.is_running = False
-        self._stop()
-        self._led("all_off")
+        # DONE 종료 시 _main_loop가 이미 rclpy.shutdown()을 호출한 상태 —
+        # 무효화된 컨텍스트에 publish하면 RCLError로 프로세스가 에러 종료됨.
+        # (all_off를 안 보내므로 DONE의 all_blink는 규칙 11대로 계속 점멸)
+        if rclpy.ok():
+            self._stop()
+            self._led("all_off")
 
 
 # =============================================================================
@@ -805,11 +874,14 @@ def main():
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.shutdown()
-        node.destroy_node()
+        try:
+            node.destroy_node()
+        except Exception:  # noqa: BLE001 — 컨텍스트 무효 시 정리 실패 무시
+            pass
         if rclpy.ok():
             rclpy.shutdown()
 
