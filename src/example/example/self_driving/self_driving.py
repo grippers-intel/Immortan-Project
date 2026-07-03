@@ -248,10 +248,6 @@ class SelfDrivingNode(Node):
         self.turn_right = False  # right turning sign
         self.right_min_area = 1000  # 우회전 표지판이 이 면적 이상(가까움)일 때만 인정. 너무 일찍 켜지면 ↑, 아예 안 켜지면 ↓ (로그 보고 튜닝)
 
-        # [LED] 화살표(직진) 표지판 인식 시 노란 LED 점멸용. go 표지판 본 뒤 일정 시간 점멸.
-        self.count_go = 0
-        self.go_signal_time = 0  # 직진 표지판 마지막 인식 시각
-        self.go_signal_duration = 3.0  # 직진 표지판 인식 후 노란불 점멸 유지 시간(초)
         self.last_led_state = (
             None  # 마지막으로 발행한 LED 색(변화 시에만 발행해 토픽 과다 방지)
         )
@@ -715,12 +711,6 @@ class SelfDrivingNode(Node):
             # 우회전 표지판 인식/회전 중 → 우측(index2) 노란 점멸
             led1 = OFF
             led2 = YELLOW if blink else OFF
-        elif (
-            self.go_signal_time
-            and (time.time() - self.go_signal_time) < self.go_signal_duration
-        ):
-            # 직진 표지판 인식 → 양쪽 노란 점멸
-            led1 = led2 = YELLOW if blink else OFF
         else:
             # 주행 → 녹색
             led1 = led2 = GREEN
@@ -740,11 +730,6 @@ class SelfDrivingNode(Node):
                 bb_led.mode_stop()
             elif self.doing_turn_right or self.turn_right:
                 bb_led.mode_turn_right()
-            elif (
-                self.go_signal_time
-                and (time.time() - self.go_signal_time) < self.go_signal_duration
-            ):
-                bb_led.mode_straight()
             else:
                 bb_led.mode_straight()
         except Exception as e:
@@ -1248,13 +1233,6 @@ class SelfDrivingNode(Node):
                         and center[1] > min_distance
                     ):  # Obtain recent y-axis pixel coordinate of the crosswalk
                         min_distance = center[1]
-                elif (
-                    class_name == "go"
-                ):  # [LED] 직진 화살표 표지판 → 노란 LED 점멸 트리거
-                    self.count_go += 1
-                    if self.count_go >= 3:
-                        self.go_signal_time = time.time()
-                        self.count_go = 0
                 elif class_name == "right":  # obtain the right turning sign
                     # [수정] 표지판이 '충분히 가까울 때'(박스 큼)만 카운트 → 멀리서 일찍 turn_right가 켜져
                     #   엉뚱한 앞 코너에서 깜빡이가 켜지거나 일반 코너링이 우회전을 가로채던 문제 방지.
