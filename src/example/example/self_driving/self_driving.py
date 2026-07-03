@@ -190,6 +190,9 @@ class SelfDrivingNode(Node):
 
         self.count_right = 0
         self.count_right_miss = 0
+        self.right_raw_last_seen_time = (
+            0  # 우회전 표지판 마지막 본 시각 (정지 유지 판단용)
+        )
         self.turn_right = False  # right turning sign
 
         self.last_park_detect = False
@@ -500,7 +503,9 @@ class SelfDrivingNode(Node):
                             self.crosswalk_box_height > 19
                         ):  # 12→17→19: 더 가까이 가서 정지
                             self.count_crosswalk += 1
-                            if self.count_crosswalk >= 2:
+                            if (
+                                self.count_crosswalk >= 1
+                            ):  # 2→1: 디바운스 제거 → 즉시 정지 (앞 크로스워크 물고 멈춤/더딤 개선)
                                 self.count_crosswalk = 0
                                 self.start_slow_down = True
                                 self.pre_slow_down = False
@@ -566,8 +571,16 @@ class SelfDrivingNode(Node):
                         self.just_stopped_crosswalk = True
                         self.accel_ramp_active = True  # 초록불 재출발 가속 구간
                         self.accel_ramp_start_time = time.time()
-                    elif not is_green and time.time() - self.stop_time > 0.7:
-                        # 신호 없음(or 작은 red) → 0.7초 후 재출발
+                    elif (
+                        not is_green
+                        and time.time() - self.stop_time > 0.7
+                        and (
+                            time.time() - self.right_raw_last_seen_time > 0.5
+                            or time.time() - self.stop_time > 2.0
+                        )
+                    ):
+                        # 신호 없음 → 0.7초 후 재출발. 단, 우회전 표지판이 보이는 중이면
+                        # 최대 2초까지 정지 유지 (카운트 채워 83° 회전 트리거되게, 표지판 보고 직진 방지)
                         self.stop = False
                         self.start_slow_down = False
                         self.crosswalk_distance = 0
@@ -912,9 +925,12 @@ class SelfDrivingNode(Node):
                     )
                     self.count_right += 1  # 주행/정지 무관 보일 때마다 누적
                     self.count_right_miss = 0
+                    self.right_raw_last_seen_time = (
+                        time.time()
+                    )  # 표지판 본 시각(정지 유지용)
                     if (
-                        self.count_right >= 5
-                    ):  # 목표 카운트(5) 이상 → 우회전 준비 (실행은 횡단보도 정지 후 turn_right_action)
+                        self.count_right >= 3
+                    ):  # 5→3: 짧은 정지에도 카운트 채워 83° 회전 트리거 (표지판 보고 직진 방지)
                         self.have_turn_right = True
                 elif class_name == "park":
                     sign_h = abs(i.box[1] - i.box[3])
