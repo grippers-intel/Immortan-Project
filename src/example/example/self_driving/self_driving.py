@@ -366,6 +366,14 @@ class SelfDrivingNode(Node):
         # (실제 score 값)를 보고 "균열은 이 값 미만/진짜는 이 값 이상"인 지점을 찾아
         # 다시 올릴 것.
         self.crosswalk_min_score = 0.25
+        # [폭/높이 필터] area/aspect/score만으로는 아주 작고 가느다란 오검출(예: 얇고
+        # 긴 균열)이 aspect 조건을 우연히 만족하며 통과하는 경우가 남아있어, 절대
+        # 픽셀 크기 하한을 추가로 둠(과거 커밋 0b021f5의 is_valid_crosswalk 로직 참고).
+        # area/aspect 필터를 대체하는 게 아니라 추가 안전장치이므로 값은 기존 filter를
+        # 방해하지 않을 정도로 낮게 잡음. 진짜 횡단보도까지 걸리면 ↓, 여전히 작은
+        # 오검출이 통과하면 ↑
+        self.crosswalk_min_width = 40
+        self.crosswalk_min_height = 10
         # [4차 실차 테스트] "탐지는 됐지만 제대로 멈추지 못함" 증상 - 정지 확정에 3프레임
         # 연속 검출을 요구했는데, 박스 좌표가 프레임마다 살짝 흔들리면(jitter) distance가
         # stop_dist 근처에서 오르내리며 카운터가 계속 리셋되어 확정 전에 이미 지나쳐버림.
@@ -549,8 +557,7 @@ class SelfDrivingNode(Node):
         # [8차 실차 테스트 기준 정정] 실측(1~4차 로그 전체)으로는 일반 클릭이 항상
         # state=1로만 들어오고 state=0은 한 번도 관측되지 않았음 - 아래 주석의
         # "0=클릭 완료" 가정은 틀렸던 것으로 보임. state=1이 이 보드에서의 실제 클릭
-        # 신호. (0,1) 둘 다 시작 신호로는 여전히 허용하되, 더블클릭 판정은 실측값인
-        # state=1 기준으로 함(아래 button_callback 참고).
+        # 신호. (0,1) 둘 다 시작 신호 및 더블클릭 판정에 동일하게 사용함(아래 참고).
         self.get_logger().info(
             "\033[1;36m%s\033[0m"
             % f"button msg received: id={msg.id}, state={msg.state}"
@@ -582,14 +589,19 @@ class SelfDrivingNode(Node):
         # 보임 - 애초에 0/1 의미를 실측 없이 추측했던 게 잘못이었음). state=0 기준으로
         # 카운트하던 로직이라 더블클릭 분기 자체가 한 번도 실행되지 않았던 것. 실제 관측된
         # state=1 기준으로 수정.
-        if msg.state == 1:
-            if now - self.last_click_time <= self.double_click_window:
-                self.last_click_time = (
-                    0  # 소비(연속 클릭이 리셋을 반복 유발하지 않도록)
-                )
-                self.reset_mission()
-                return
-            self.last_click_time = now
+        # [재확인] 더블클릭 초기화가 여전히 간헐적으로 안 먹힌다는 리포트로 재점검.
+        # 위 568번째 줄에서는 state 0/1을 모두 "클릭"으로 인정해 주행 시작 신호로
+        # 쓰는데, 더블클릭 판정(last_click_time 갱신/소비)은 `msg.state == 1`일 때만
+        # 실행되고 있었음. 즉 state=0 메시지는 더블클릭 여부를 판단하지도, 판정 창을
+        # 소비하지도 않고 곧장 아래 "주행 시작" 분기로 빠짐 - 리셋 직후에 state=0
+        # 메시지가 하나라도 따라 들어오면 더블클릭 없이 즉시 재시작되어 마치 리셋이
+        # 무시된 것처럼 보임. state=0도 여전히 유효한 클릭으로 취급하는 이상, 더블클릭
+        # 판정도 state 값과 무관하게 동일하게 적용해야 이 비대칭이 사라짐.
+        if now - self.last_click_time <= self.double_click_window:
+            self.last_click_time = 0  # 소비(연속 클릭이 리셋을 반복 유발하지 않도록)
+            self.reset_mission()
+            return
+        self.last_click_time = now
 
         if self.enter and not self.start:
             self.get_logger().info(
@@ -1163,6 +1175,8 @@ class SelfDrivingNode(Node):
                         area >= self.crosswalk_min_area
                         and aspect >= self.crosswalk_min_aspect
                         and cls_conf >= self.crosswalk_min_score
+                        and width >= self.crosswalk_min_width
+                        and height >= self.crosswalk_min_height
                     )
                     # [진단용] 2차 실차 테스트에서 score 필터가 진짜 횡단보도까지 걸러버린
                     # 것으로 보여 임계값을 데이터 없이 추측할 수밖에 없었음. 매 검출마다
@@ -1171,7 +1185,8 @@ class SelfDrivingNode(Node):
                     self.get_logger().info(
                         "\033[1;35m%s\033[0m"
                         % f"crosswalk candidate: area={area:.0f} aspect={aspect:.2f} "
-                        f"score={cls_conf:.2f} passed={passed}"
+                        f"score={cls_conf:.2f} width={width:.0f} height={height:.0f} "
+                        f"passed={passed}"
                     )
                     if passed:
                         found_crosswalk = True
